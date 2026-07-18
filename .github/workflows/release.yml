@@ -1,0 +1,288 @@
+name: Release
+
+# Builds small, MODEL-LESS installers for all three platforms and publishes them on
+# tags. Adapted from humbaba's release workflow.
+#
+# Hastur is MODEL-LESS BY DESIGN and — unlike humbaba — has NO models release. Meta's
+# SAM-3D-Body checkpoints are gated, and the ONNX graphs + MHR assets the plugin runs
+# are DERIVED from those weights (SAM License, no-reverse-engineering clause + embedded
+# DINOv3 gated terms), which must not be redistributed. So there is no `models-v1`
+# release tag and no fetch-from-release step (humbaba's model-publish/fetch machinery is
+# DROPPED here). Instead each installer carries the plugin plus tools/convert_models.{sh,ps1}
+# and a short USAGE note: after installing, the user GENERATES the model set locally from
+# their own licensed checkpoints (see docs/MODELS.md). The python export tools those
+# scripts drive live in a Hastur source checkout (point at them via $HASTUR_TOOLS_DIR).
+#
+# Build commands mirror .github/workflows/ci.yml exactly (macos-14 arm64 / manylinux_2_28
+# for the EL8 glibc floor / windows-2022 with the custom static-CRT ORT fetched by CMake),
+# and the per-platform isolation asserts (private ORT soname, only-OFX-symbols exported,
+# $ORIGIN runpath, EL8 glibc floor) are carried over from ci.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version string for the installers"
+        default: "0.1.0"
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    name: Build installer (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14        # Apple Silicon (CoreML, arm64)
+            platform: macos
+          - os: ubuntu-latest   # Linux x86-64 (CUDA)
+            platform: linux
+            # Build inside AlmaLinux 8 (glibc 2.28) so the .ofx loads on the VFX-standard
+            # RHEL/Rocky/Alma 8 hosts. ubuntu-latest links GLIBC_2.34 symbols that EL8 lacks.
+            container: quay.io/pypa/manylinux_2_28_x86_64
+          - os: windows-2022    # Windows x64 (CUDA) — pinned for the VS 2022 generator.
+            platform: windows    # CMake fetches the custom static-CRT ORT (see CMakeLists NOTE(hastur)).
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}   # empty for macOS/Windows (host); AlmaLinux 8 for Linux
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- Linux: EL8 build tools (patchelf privately renames + $ORIGIN-runpaths the ORT
+      #     in a CMake POST_BUILD; xz is needed for the .tar.xz packaging step) ---
+      - name: Prep container (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          set -euo pipefail
+          # Container runs as root; avoid git's "dubious ownership" on the checkout.
+          git config --global --add safe.directory '*'
+          command -v patchelf >/dev/null 2>&1 || dnf install -y patchelf
+          command -v file     >/dev/null 2>&1 || dnf install -y file
+          command -v xz       >/dev/null 2>&1 || dnf install -y xz
+          echo "cmake: $(cmake --version | head -1)"; g++ --version | head -1; patchelf --version
+
+      # --- Configure & build the MODEL-LESS bundle (no model files; matches ci.yml) ---
+      - name: Build (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          # ONNX Runtime's CoreML build is arm64-only, so the inference build is arm64.
+          cmake -S . -B build -DHASTUR_WITH_ONNX=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target Sam3dBody -j3
+
+      - name: Build (Linux — manylinux_2_28 / glibc 2.28 for EL8 compatibility)
+        if: matrix.platform == 'linux'
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DHASTUR_WITH_ONNX=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target Sam3dBody -j3
+          # Guard: fail the release if the .ofx needs a glibc newer than EL8's 2.28.
+          OFX=build/Sam3dBody.ofx.bundle/Contents/Linux-x86-64/Sam3dBody.ofx
+          maxg=$(grep -ao 'GLIBC_[0-9.]*' "$OFX" | sed 's/GLIBC_//' | sort -V | tail -1)
+          echo "max GLIBC required by .ofx: $maxg"
+          if [ "$(printf '%s\n2.28\n' "$maxg" | sort -V | tail -1)" != "2.28" ]; then
+            echo "::error::.ofx requires GLIBC_$maxg > 2.28 — not EL8/VFX-platform compatible"; exit 1
+          fi
+          echo "OK: glibc floor $maxg <= 2.28 (loads on RHEL/Rocky/Alma 8+)"
+
+      - name: Build (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DHASTUR_WITH_ONNX=ON
+          cmake --build build --config Release --target Sam3dBody --parallel
+
+      # --- Isolation asserts (private ORT soname + only-OFX-symbols exported), from ci.yml ---
+      - name: Verify isolated bundle (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          set -euo pipefail
+          BIN=build/Sam3dBody.ofx.bundle/Contents/MacOS/Sam3dBody.ofx
+          test -f build/Sam3dBody.ofx.bundle/Contents/Info.plist
+          test -f "$BIN"
+          # ONNX Runtime is privately renamed (isolation) — see docs/HOST_COMPATIBILITY.md.
+          test -f build/Sam3dBody.ofx.bundle/Contents/Frameworks/libonnxruntime_hastur.1.dylib
+          REFS="$(otool -L "$BIN")"
+          case "$REFS" in *libonnxruntime_hastur.1.dylib*) ;; *) echo "ofx not repointed to private ORT"; exit 1;; esac
+          case "$REFS" in *@rpath/libonnxruntime.1.dylib*) echo "ofx still references stock ORT"; exit 1;; esac
+          ARCHES="$(lipo -info "$BIN")"; echo "== arch == $ARCHES"
+          case "$ARCHES" in *arm64*) ;; *) echo "missing arm64"; exit 1;; esac
+          # Isolation (D0): ONLY the two OFX entry points may be exported.
+          SYMS="$(nm -gU "$BIN")"
+          case "$SYMS" in *OfxGetPlugin*) echo "OfxGetPlugin present" ;; *) echo "missing OfxGetPlugin"; exit 1;; esac
+          case "$SYMS" in *OfxGetNumberOfPlugins*) ;; *) echo "missing OfxGetNumberOfPlugins"; exit 1;; esac
+          NSYMS="$(nm -gU "$BIN" | grep -c ' T ')"
+          test "$NSYMS" -le 2 || { echo "too many exported symbols ($NSYMS); isolation leak"; exit 1; }
+
+      - name: Verify isolated bundle (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          set -euo pipefail
+          ARCH=build/Sam3dBody.ofx.bundle/Contents/Linux-x86-64
+          BIN="$ARCH/Sam3dBody.ofx"
+          test -f "$BIN"
+          # ONNX Runtime is privately renamed (isolation) — see docs/HOST_COMPATIBILITY.md.
+          test -f "$ARCH/libonnxruntime_hastur.so.1"
+          NEEDED="$(readelf -d "$BIN" | grep NEEDED || true)"
+          case "$NEEDED" in *libonnxruntime_hastur.so.1*) ;; *) echo "ofx not repointed to private ORT"; exit 1;; esac
+          case "$NEEDED" in *"libonnxruntime.so.1]"*) echo "ofx still references stock libonnxruntime.so.1"; exit 1;; esac
+          # CUDA provider libs must be bundled alongside the .ofx.
+          test -f "$ARCH/libonnxruntime_providers_cuda.so"
+          test -f "$ARCH/libonnxruntime_providers_shared.so"
+          FILE="$(file -b "$BIN")"; echo "== file == $FILE"
+          case "$FILE" in *"ELF 64-bit"*"shared object"*) ;; *) echo "not an ELF shared object"; exit 1;; esac
+          RUNPATH="$(readelf -d "$BIN" | grep -E 'RUNPATH|RPATH' || true)"; echo "== runpath == $RUNPATH"
+          case "$RUNPATH" in *'$ORIGIN'*) ;; *) echo "missing \$ORIGIN runpath"; exit 1;; esac
+          SYMS="$(nm -D "$BIN" || true)"
+          case "$SYMS" in *OfxGetPlugin*) echo "OfxGetPlugin present" ;; *) echo "missing OfxGetPlugin"; exit 1;; esac
+          case "$SYMS" in *OfxGetNumberOfPlugins*) ;; *) echo "missing OfxGetNumberOfPlugins"; exit 1;; esac
+
+      - name: Verify isolated bundle (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $arch = "build/Sam3dBody.ofx.bundle/Contents/Win64"
+          # ORT is bundled under a PRIVATE name (onnxruntime_hastur.dll) to avoid the
+          # base-name collision with Windows ML's C:\Windows\System32\onnxruntime.dll.
+          foreach ($f in @("Sam3dBody.ofx","onnxruntime_hastur.dll",
+                           "onnxruntime_providers_cuda.dll","onnxruntime_providers_shared.dll")) {
+            if (!(Test-Path "$arch/$f")) { throw "missing $f" }
+          }
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $dumpbin = & $vswhere -latest -products * -find "VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          if (-not $dumpbin) { throw "could not locate dumpbin.exe via vswhere" }
+          $exports = (& $dumpbin /exports "$arch\Sam3dBody.ofx" | Out-String)
+          if ($exports -notmatch "OfxGetNumberOfPlugins") { throw "missing OfxGetNumberOfPlugins export" }
+          if ($exports -notmatch "OfxGetPlugin") { throw "missing OfxGetPlugin export" }
+          Write-Host "Win64 bundle + OFX exports OK"
+
+      # --- Package per platform, carrying convert_models.{sh,ps1} + a model-less USAGE note ---
+      - name: Package (macOS .pkg)
+        if: matrix.platform == 'macos'
+        env:
+          VERSION: ${{ github.event.inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          V="${VERSION#v}"; [ -n "$V" ] || V="0.1.0"
+          # A short model-less USAGE note, injected next to the plugin.
+          cat > USAGE-MODELS.txt <<'EOF'
+          Sam3dBody OFX plugin (Hastur) — MODEL-LESS installer
+          ====================================================
+          This installer contains the plugin ONLY. Hastur ships NO model weights.
+          Meta's SAM-3D-Body checkpoints are gated; the runtime ONNX/MHR assets are
+          DERIVED from them and must not be redistributed, so you GENERATE them
+          locally from your own licensed copy of the checkpoints.
+
+          After installing:
+            1. Accept the SAM License + DINOv3 gated terms on Hugging Face and download
+               the checkpoints with your own HF token.
+            2. From a Hastur source checkout (it provides the python export tools that
+               convert_models drives), run the bundled convert_models script:
+
+               macOS / Linux:
+                 HASTUR_TOOLS_DIR=/path/to/Hastur/tools \
+                   <bundle>/Contents/convert_models.sh \
+                     --ckpt-dir /path/to/checkpoints/sam-3d-body-dinov3 \
+                     --python   /path/to/torch-env/bin/python
+
+               Windows:
+                 $env:HASTUR_TOOLS_DIR="C:\path\to\Hastur\tools"
+                 & "<bundle>\Contents\convert_models.ps1" `
+                     -CkptDir C:\path\to\checkpoints\sam-3d-body-dinov3 `
+                     -Python  C:\path\to\torch-env\Scripts\python.exe
+
+          Full instructions: docs/MODELS.md in the Hastur repository.
+          EOF
+          # make_pkg.sh injects tools/convert_models.sh into Contents/ by default (AFTER
+          # code-signing). Add the .ps1 counterpart + the USAGE note via --extra-contents
+          # so both convert_models scripts ride in every installer.
+          packaging/make_pkg.sh --bundle build/Sam3dBody.ofx.bundle \
+            --out "dist/Sam3dBody-$V-macos-arm64.pkg" --version "$V" \
+            --extra-contents tools/convert_models.ps1 \
+            --extra-contents USAGE-MODELS.txt
+
+      - name: Package (Linux .tar.xz)
+        if: matrix.platform == 'linux'
+        env:
+          VERSION: ${{ github.event.inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          V="${VERSION#v}"; [ -n "$V" ] || V="0.1.0"
+          C=build/Sam3dBody.ofx.bundle/Contents
+          cp tools/convert_models.sh  "$C/convert_models.sh";  chmod +x "$C/convert_models.sh"
+          cp tools/convert_models.ps1 "$C/convert_models.ps1"
+          cat > "$C/USAGE-MODELS.txt" <<'EOF'
+          Sam3dBody OFX plugin (Hastur) — MODEL-LESS installer.
+          Ships NO model weights: generate the model set locally from your own gated
+          SAM-3D-Body checkpoints with the bundled convert_models.sh, e.g.:
+            HASTUR_TOOLS_DIR=/path/to/Hastur/tools \
+              <bundle>/Contents/convert_models.sh \
+                --ckpt-dir /path/to/checkpoints/sam-3d-body-dinov3 \
+                --python   /path/to/torch-env/bin/python
+          Full instructions: docs/MODELS.md in the Hastur repository.
+          EOF
+          mkdir -p dist
+          tar -C build -caf "dist/Sam3dBody-$V-linux-x86_64.tar.xz" Sam3dBody.ofx.bundle
+
+      - name: Package (Windows .zip)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ github.event.inputs.version || github.ref_name }}
+        run: |
+          $v = "${env:VERSION}" -replace '^v',''
+          if (-not $v) { $v = "0.1.0" }
+          $c = "build/Sam3dBody.ofx.bundle/Contents"
+          Copy-Item tools/convert_models.ps1 "$c/convert_models.ps1"
+          Copy-Item tools/convert_models.sh  "$c/convert_models.sh"
+          @"
+          Sam3dBody OFX plugin (Hastur) - MODEL-LESS installer.
+          Ships NO model weights: generate the model set locally from your own gated
+          SAM-3D-Body checkpoints with the bundled convert_models.ps1, e.g.:
+            `$env:HASTUR_TOOLS_DIR="C:\path\to\Hastur\tools"
+            & "<bundle>\Contents\convert_models.ps1" ``
+                -CkptDir C:\path\to\checkpoints\sam-3d-body-dinov3 ``
+                -Python  C:\path\to\torch-env\Scripts\python.exe
+          Full instructions: docs/MODELS.md in the Hastur repository.
+          "@ | Set-Content -Encoding utf8 "$c/USAGE-MODELS.txt"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path build/Sam3dBody.ofx.bundle `
+            -DestinationPath "dist/Sam3dBody-$v-windows-x64.zip" -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create/attach release (installers + convert scripts)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Publish the platform installers plus the standalone convert_models scripts.
+          # Hastur is MODEL-LESS and has NO models release: the user GENERATES the model
+          # set locally from their own gated checkpoints (see docs/MODELS.md).
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/* tools/convert_models.sh tools/convert_models.ps1 \
+            --generate-notes --title "${GITHUB_REF_NAME}" \
+            --notes "Model-less installers for the Sam3dBody OFX plugin (Hastur).
+
+          Hastur ships NO model weights. After installing, GENERATE the model set locally
+          from your own gated SAM-3D-Body checkpoints with the bundled convert_models
+          script (or the standalone one attached here). There is no Hastur-hosted models
+          release — the runtime assets are derived from Meta's gated weights and must not
+          be redistributed. Full instructions: docs/MODELS.md." \
+          || gh release upload "${GITHUB_REF_NAME}" \
+               dist/* tools/convert_models.sh tools/convert_models.ps1 --clobber
