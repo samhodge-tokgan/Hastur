@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // CropAffine — build the 512x512 body/hand crop + camera conditioning for one
 // person, ported from the SAM 3D Body reference (sam-3d-body @ c259bfc):

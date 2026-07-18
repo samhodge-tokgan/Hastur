@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # export_mesh_oracle.py -- the NUMERICAL ORACLE for the MHR mesh path.
 #

@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // pipeline_smoke — offline end-to-end exercise of Sam3dBodyPipeline (no OFX host).
 //

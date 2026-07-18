@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // Sam3dBodyEngine — ONNX Runtime wrapper around the body-only SAM-3D-Body core
 // regressor exported by tools/export_sam3dbody.py (Track B / M3).

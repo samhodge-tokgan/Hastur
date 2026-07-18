@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # validate_wrist.py -- ground-truth the M7 wrist-angle criterion (CRITERIA 1) for
 # a given image, replicating sam3d_body.run_inference with the reference decoders +

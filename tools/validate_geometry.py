@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # Track F geometry validation: assert the C++ ports in src/CameraSolver.{h,cpp}
 # and src/CropAffine.{h,cpp} match the sam-3d-body reference (@ c259bfc) to

@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // SoftwareRasterizer.h -- dependency-light CPU rasterizer that renders a posed
 // MHR human mesh to a neutral-grey RGBA image with a coverage alpha at the input

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # validate_body.py -- numeric parity + CoreML partition audit for the exported
 # body-only SAM-3D-Body regressor (M3 / Track B). Writes BODY_EXPORT_REPORT.md.

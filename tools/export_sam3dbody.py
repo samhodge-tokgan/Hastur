@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # export_sam3dbody.py -- export the SAM-3D-Body *body-only* core regressor to a
 # fixed-shape fp16 ONNX for the Hastur ORT engine (M3 / Track B).

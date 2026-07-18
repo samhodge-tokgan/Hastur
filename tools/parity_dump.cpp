@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // parity_dump -- M5 numeric-parity harness. Runs the REAL Sam3dBodyPipeline on an
 // input image and dumps, per detected person, the full inter-stage contract

@@ -1,5 +1,5 @@
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # mhr_common.py -- shared helpers for the MHR mesh oracle / asset extraction.
 #

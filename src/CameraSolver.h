@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // CameraSolver — pure-geometry camera/conditioning math ported from the
 // SAM 3D Body reference (sam-3d-body @ c259bfc). No ONNX Runtime, no OFX SDK;

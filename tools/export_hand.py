@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # export_hand.py -- export the SAM-3D-Body *hand-decoder* 2nd pass to a
 # fixed-shape fp16 ONNX for the Hastur HandRefinerEngine (M7).

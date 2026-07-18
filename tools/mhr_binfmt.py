@@ -1,5 +1,5 @@
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # mhr_binfmt.py -- writer for the versioned flat binary `mhr_assets.bin`.
 #

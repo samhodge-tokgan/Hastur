@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # make_pkg.sh — build a macOS installer for the Sam3dBody OFX plugin (project
 # "Hastur").

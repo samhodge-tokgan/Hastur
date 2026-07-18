@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // MhrModel.h -- C++/Eigen reimplementation of Meta's MHR (Momentum Human Rig)
 // parametric body model. Takes a 519-d MHR-head parameter vector and produces

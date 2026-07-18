@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # convert_models.sh — generate the Sam3dBody plugin's model set LOCALLY from your
 # own copy of Meta's gated SAM-3D-Body checkpoints.

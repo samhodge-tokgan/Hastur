@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // Cross-platform ONNX Runtime accelerator execution-provider selection:
 // CoreML on macOS, CUDA on Linux/Windows (with the caller's CPU fallback).

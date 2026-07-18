@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // Registration glue for the single .ofx binary. The bundle registers one plugin
 // (the SAM 3D Body effect) from OFX::Plugin::getPluginIDs. As additional

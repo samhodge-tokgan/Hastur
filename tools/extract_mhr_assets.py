@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # extract_mhr_assets.py -- extract the STATIC MHR buffers needed for the C++ LBS
 # into a versioned flat binary `mhr_assets.bin` (+ mhr_assets.manifest.json).

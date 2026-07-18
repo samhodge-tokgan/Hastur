@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // MeshAssets.h -- loads the versioned flat binary `mhr_assets.bin` (produced by
 // tools/extract_mhr_assets.py) that holds every STATIC MHR buffer the C++ LBS

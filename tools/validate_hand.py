@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # validate_hand.py -- numeric parity for the exported hand-decoder pass (M7).
 # Writes HAND_EXPORT_REPORT.md.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # bench_detector.py -- bbox-parity benchmark for the M1 person detector.
 #
