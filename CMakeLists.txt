@@ -344,23 +344,32 @@ if(HASTUR_WITH_ONNX)
 endif()
 
 # ---------------------------------------------------------------------------
-# Optionally bundle the model set into Contents/Resources (release/self-contained
-# build). SAM 3D Body is a MODEL-LESS plugin: the ONNX models + mesh assets are
-# user-generated locally (or fetched with tools/fetch_models.{sh,ps1}), not committed.
+# Model set (INTENTIONALLY not bundled here). SAM 3D Body is a MODEL-LESS plugin:
+# it ships NO Meta weights. The ONNX models + mesh assets are DERIVED from Meta's
+# gated SAM-3D-Body checkpoints (SAM License, no-redistribution) and are therefore
+# USER-GENERATED locally — never committed and never staged into the build.
 #
-# TODO(models): wire up per-model bundling once the export pipeline is pinned. The
-# BODY-ONLY (M4) pipeline resolves these four files from Contents/Resources (or
-# $HASTUR_MODEL_DIR / the model-dir param):
-#   - person_detector.onnx   (person / bbox detector, first stage)
-#   - sam3dbody_body.onnx     (SAM 3D body ViT regressor)
-#   - mhr_assets.bin          (MHR mesh-recovery static buffers, C++ FK+LBS)
-#   - pose_corrective.onnx    (pose-corrective vertex-offset MLP)
+# The one wire-up script that produces the whole set from a user's gated
+# checkpoints is tools/convert_models.{sh,ps1} (it runs the tools/export_* +
+# extract_mhr_assets tools in order). packaging/make_pkg.sh injects convert_models
+# into the installed bundle's Contents/; after install the user runs it to populate
+# Contents/Resources. tools/fetch_models.{sh,ps1} is a pointer to convert_models
+# (+ an optional HASTUR_MODELS_BASE_URL mirror hook for a user-hosted set).
+#
+# The BODY-ONLY (M4) pipeline resolves these four REQUIRED files from
+# Contents/Resources (or $HASTUR_MODEL_DIR / the model-dir param):
+#   - person_detector.onnx   (person / bbox detector; tools/export_detector.py)
+#   - sam3dbody_body.onnx     (SAM 3D body ViT regressor; tools/export_sam3dbody.py)
+#   - mhr_assets.bin          (MHR static buffers, C++ FK+LBS; tools/extract_mhr_assets.py)
+#   - pose_corrective.onnx    (pose-corrective vertex-offset MLP; tools/export_pose_corrective.py)
 # The M7 hand refiner adds two OPTIONAL files (absence -> graceful body-only):
 #   - sam3dbody_hand.onnx     (hand-decoder 2nd pass; tools/export_hand.py)
-#   - mhr_wrist.bin           (wrist-twist joint_rotation[77,41], wrist-angle gate)
-# Dev-time these are staged manually into Contents/Resources or pointed at via
-# HASTUR_MODEL_DIR. Add one HASTUR_<MODEL>_FILE cache var + copy custom-command per
-# entry (mirroring the ONNX-Runtime bundling block above) once the models are pinned.
+#   - mhr_wrist.bin           (wrist-twist joint_rotation[77,41], wrist-angle gate; export_hand.py)
+#
+# DELIBERATELY no per-model install()/copy custom-command here: adding one would
+# require the weights to exist at build/pack time, which would defeat the model-less
+# posture. A self-contained build simply drops the convert_models output into
+# ${BUNDLE_DIR}/Contents/Resources before packaging.
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
