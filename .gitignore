@@ -1,0 +1,46 @@
+# Build
+/build/
+/build-*/
+/dist/
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.ofx
+*.ofx.bundle/
+
+# Models & assets (model-less: generated locally, never committed)
+*.onnx
+*.onnx_data
+*.pt
+*.ckpt
+*.pkl
+*.npz
+mhr_assets.bin
+/checkpoints/
+/models/
+.cache/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+/env/
+*.egg-info/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+_deps/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

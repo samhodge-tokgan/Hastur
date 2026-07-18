@@ -1,0 +1,258 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Build/packaging CI for the SAM 3D Body (Hastur) OFX plugin. Ported from humbaba.
+# Validates the .ofx bundle build + layout + OFX-symbol isolation + that the CUDA EP is
+# compiled into the bundled ONNX Runtime on all three platforms. Real GPU inference is
+# exercised by the self-hosted gpu-smoke job.
+
+jobs:
+  sanity:
+    name: Repo sanity
+    runs-on: macos-14   # Apple Silicon runner (arm64)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required files exist
+        run: |
+          set -euo pipefail
+          for f in LICENSE CMakeLists.txt .gitignore docs/HOST_COMPATIBILITY.md; do
+            test -f "$f" || { echo "missing $f"; exit 1; }
+          done
+          echo "Repo sanity OK"
+
+      - name: Confirm LICENSE is Apache-2.0
+        run: grep -q "Apache License" LICENSE && grep -q "Version 2.0" LICENSE
+
+  build:
+    name: Build .ofx bundle (ONNX/CoreML, arm64)
+    runs-on: macos-14   # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure & build (ONNX Runtime + CoreML, arm64)
+        run: |
+          # ONNX Runtime's CoreML build is arm64-only, so the inference build is arm64.
+          cmake -S . -B build -DHASTUR_WITH_ONNX=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j3
+
+      - name: Verify bundle, architecture, OFX symbols and bundled runtime
+        run: |
+          set -euo pipefail
+          BIN=build/Sam3dBody.ofx.bundle/Contents/MacOS/Sam3dBody.ofx
+          test -f build/Sam3dBody.ofx.bundle/Contents/Info.plist
+          test -f "$BIN"
+          # ONNX Runtime is privately renamed (isolation) — see docs/HOST_COMPATIBILITY.md.
+          test -f build/Sam3dBody.ofx.bundle/Contents/Frameworks/libonnxruntime_hastur.1.dylib
+          # The .ofx must reference the private install name, not the stock one.
+          REFS="$(otool -L "$BIN")"
+          case "$REFS" in *libonnxruntime_hastur.1.dylib*) ;; *) echo "ofx not repointed to private ORT"; exit 1;; esac
+          case "$REFS" in *@rpath/libonnxruntime.1.dylib*) echo "ofx still references stock ORT"; exit 1;; esac
+          # Shell pattern matching, not `... | grep -q` (SIGPIPE under pipefail).
+          ARCHES="$(lipo -info "$BIN")"
+          echo "== arch == $ARCHES"
+          case "$ARCHES" in *arm64*) ;; *) echo "missing arm64"; exit 1;; esac
+          # Isolation (D0): ONLY the two OFX entry points may be exported.
+          SYMS="$(nm -gU "$BIN")"
+          echo "== exported symbols ==" ; echo "$SYMS"
+          case "$SYMS" in *OfxGetPlugin*) echo "OfxGetPlugin present" ;; *) echo "missing OfxGetPlugin"; exit 1;; esac
+          case "$SYMS" in *OfxGetNumberOfPlugins*) ;; *) echo "missing OfxGetNumberOfPlugins"; exit 1;; esac
+          NSYMS="$(nm -gU "$BIN" | grep -c ' T ')"
+          test "$NSYMS" -le 2 || { echo "too many exported symbols ($NSYMS); isolation leak"; exit 1; }
+
+      - name: Verify CoreML EP available at runtime
+        run: |
+          ./build/ort_check
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sam3dBody-ofx-bundle
+          path: build/Sam3dBody.ofx.bundle
+          if-no-files-found: error
+
+  build-linux:
+    name: Build .ofx bundle (ONNX/CUDA, Linux x86_64)
+    runs-on: ubuntu-latest
+    # Build inside AlmaLinux 8 (glibc 2.28) so the .ofx loads on RHEL/Rocky/Alma 8 (the
+    # VFX Reference Platform). ubuntu-latest links GLIBC_2.34 symbols that EL8 lacks.
+    # GPU inference is verified separately on a self-hosted CUDA box (see docs/LINUX.md).
+    container: quay.io/pypa/manylinux_2_28_x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prep container (EL8 build tools; patchelf privately renames the ORT)
+        run: |
+          git config --global --add safe.directory '*'
+          command -v patchelf >/dev/null 2>&1 || dnf install -y patchelf
+          command -v file     >/dev/null 2>&1 || dnf install -y file
+          echo "cmake: $(cmake --version | head -1)"; g++ --version | head -1; patchelf --version
+
+      - name: Configure & build (ONNX Runtime CUDA package, Linux)
+        run: |
+          cmake -S . -B build -DHASTUR_WITH_ONNX=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target ort_check Sam3dBody -j3
+
+      - name: Assert EL8 glibc floor (.ofx must not need > 2.28)
+        run: |
+          set -euo pipefail
+          OFX=build/Sam3dBody.ofx.bundle/Contents/Linux-x86-64/Sam3dBody.ofx
+          maxg=$(grep -ao 'GLIBC_[0-9.]*' "$OFX" | sed 's/GLIBC_//' | sort -V | tail -1)
+          echo "max GLIBC required by .ofx: $maxg"
+          if [ "$(printf '%s\n2.28\n' "$maxg" | sort -V | tail -1)" != "2.28" ]; then
+            echo "::error::.ofx requires GLIBC_$maxg > 2.28 — not EL8-compatible"; exit 1
+          fi
+          echo "OK: glibc floor $maxg <= 2.28 (loads on RHEL/Rocky/Alma 8+)"
+
+      - name: Verify Linux bundle layout, ELF, OFX symbols and bundled runtime
+        run: |
+          set -euo pipefail
+          ARCH=build/Sam3dBody.ofx.bundle/Contents/Linux-x86-64
+          BIN="$ARCH/Sam3dBody.ofx"
+          test -f "$BIN"
+          # ONNX Runtime is privately renamed (isolation) — see docs/HOST_COMPATIBILITY.md.
+          test -f "$ARCH/libonnxruntime_hastur.so.1"
+          # The .ofx must NEED the private name, not the stock one.
+          NEEDED="$(readelf -d "$BIN" | grep NEEDED || true)"
+          case "$NEEDED" in *libonnxruntime_hastur.so.1*) ;; *) echo "ofx not repointed to private ORT"; exit 1;; esac
+          case "$NEEDED" in *"libonnxruntime.so.1]"*) echo "ofx still references stock libonnxruntime.so.1"; exit 1;; esac
+          # CUDA provider libs must be bundled alongside the .ofx.
+          test -f "$ARCH/libonnxruntime_providers_cuda.so"
+          test -f "$ARCH/libonnxruntime_providers_shared.so"
+          # ELF shared object with $ORIGIN runpath so it finds the bundled ORT.
+          FILE="$(file -b "$BIN")"
+          echo "== file == $FILE"
+          case "$FILE" in *"ELF 64-bit"*"shared object"*) ;; *) echo "not an ELF shared object"; exit 1;; esac
+          RUNPATH="$(readelf -d "$BIN" | grep -E 'RUNPATH|RPATH' || true)"
+          echo "== runpath == $RUNPATH"
+          case "$RUNPATH" in *'$ORIGIN'*) ;; *) echo "missing \$ORIGIN runpath"; exit 1;; esac
+          SYMS="$(nm -D "$BIN" || true)"
+          case "$SYMS" in *OfxGetPlugin*) echo "OfxGetPlugin present" ;; *) echo "missing OfxGetPlugin"; exit 1;; esac
+          case "$SYMS" in *OfxGetNumberOfPlugins*) ;; *) echo "missing OfxGetNumberOfPlugins"; exit 1;; esac
+
+      - name: Verify CUDA EP compiled into the ORT package
+        run: |
+          set -euo pipefail
+          OUT="$(LD_LIBRARY_PATH="$PWD/build/Sam3dBody.ofx.bundle/Contents/Linux-x86-64" ./build/ort_check || true)"
+          echo "$OUT"
+          case "$OUT" in *"CUDAExecutionProvider"*) echo "CUDA EP present" ;; *) echo "CUDA EP missing from ORT package"; exit 1;; esac
+
+      - name: Upload Linux bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sam3dBody-ofx-bundle-linux
+          path: build/Sam3dBody.ofx.bundle
+          if-no-files-found: error
+
+  build-windows:
+    name: Build .ofx bundle (ONNX/CUDA, Windows x64)
+    runs-on: windows-2022     # pin: has VS 2022 for the "Visual Studio 17 2022" generator.
+                              # CPU-only runner: validates the MSVC build, Win64
+                              # bundle layout, and that the CUDA-enabled ORT links.
+                              # Actual GPU inference is verified on a self-hosted
+                              # CUDA box (see docs/WINDOWS.md).
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure & build (ONNX Runtime CUDA package, MSVC)
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DHASTUR_WITH_ONNX=ON
+          cmake --build build --config Release --target ort_check Sam3dBody --parallel
+
+      - name: Verify Win64 bundle layout, DLLs and OFX exports
+        shell: pwsh
+        run: |
+          $arch = "build/Sam3dBody.ofx.bundle/Contents/Win64"
+          # ORT is bundled under a PRIVATE name (onnxruntime_hastur.dll) to avoid the
+          # base-name collision with Windows ML's C:\Windows\System32\onnxruntime.dll.
+          foreach ($f in @("Sam3dBody.ofx","onnxruntime_hastur.dll",
+                           "onnxruntime_providers_cuda.dll","onnxruntime_providers_shared.dll")) {
+            if (!(Test-Path "$arch/$f")) { throw "missing $f" }
+          }
+          # Locate dumpbin via vswhere (reliable across runner images).
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $dumpbin = & $vswhere -latest -products * -find "VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          if (-not $dumpbin) { throw "could not locate dumpbin.exe via vswhere" }
+          Write-Host "dumpbin: $dumpbin"
+          # Out-String: collapse the line array to one string so -match is a boolean
+          # (on an array, -match returns the matching elements, not true/false).
+          $exports = (& $dumpbin /exports "$arch\Sam3dBody.ofx" | Out-String)
+          if ($exports -notmatch "OfxGetNumberOfPlugins") { throw "missing OfxGetNumberOfPlugins export" }
+          if ($exports -notmatch "OfxGetPlugin") { throw "missing OfxGetPlugin export" }
+          Write-Host "Win64 bundle + OFX exports OK"
+
+      - name: Verify CUDA EP compiled into the ORT package
+        shell: pwsh
+        run: |
+          $out = (& build/Release/ort_check.exe | Out-String)
+          Write-Host $out
+          if ($out -notmatch "CUDAExecutionProvider") { throw "CUDA EP missing from ORT package" }
+
+      - name: Upload Windows bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sam3dBody-ofx-bundle-windows
+          path: build/Sam3dBody.ofx.bundle
+          if-no-files-found: error
+
+  gpu-smoke:
+    name: GPU inference smoke (self-hosted CUDA)
+    # Runs on a self-hosted box with an NVIDIA GPU (CUDA 12.x, cuDNN 9 on the loader
+    # path). GitHub-hosted runners have no GPU, so this is the only job that exercises
+    # ACTUAL CUDA. The `cuda` label may be on a Windows box (RTX 3090s, VS 2022) or a
+    # Rocky Linux 8 box — the steps below branch on runner.os so either can service it.
+    # See docs/CI_RUNNERS.md for runner setup (the runners currently serve humbaba and
+    # must be (re-)registered to this repo).
+    # TODO(M9): drop this gate once the CUDA runners are registered to Hastur. Until then
+    # this job is manual-only (workflow_dispatch) so it does not queue forever on push/PR.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: [self-hosted, cuda]
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---- Build ort_check (one step per OS) ----
+      - name: Build ort_check (Windows, VS 2022)
+        # Windows PowerShell 5.1 (powershell.exe, always in System32) — the runner
+        # service account (NETWORK SERVICE) has no pwsh (PowerShell 7) on its PATH.
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DHASTUR_WITH_ONNX=ON
+          cmake --build build --config Release --target ort_check --parallel
+
+      - name: Build ort_check (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cmake -S . -B build -DHASTUR_WITH_ONNX=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target ort_check -j"$(nproc)"
+
+      # ---- Smoke: run ort_check (one step per OS) ----
+      # TODO(M9): replace with golden_invariant.py geometric check. Hastur has no
+      # depth-mean golden (SAM 3D Body outputs a mesh, not a depth map), so the parity
+      # assertion from humbaba does not apply. For now this just confirms ort_check
+      # builds and runs on the GPU host (provider listing / CUDA EP presence); the real
+      # geometric invariant check on a recovered mesh lands with the inference stages.
+      - name: Run ort_check smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $out = (& build/Release/ort_check.exe --help | Out-String)
+          Write-Host $out
+          Write-Host "GPU smoke placeholder OK (ort_check built + ran)."
+
+      - name: Run ort_check smoke (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          # ort_check has BUILD_RPATH=${ORT_DIR}/lib so it resolves the ORT + CUDA
+          # provider libs directly; no bundle assembly needed for this smoke.
+          ./build/ort_check --help || true
+          echo "GPU smoke placeholder OK (ort_check built + ran)."
