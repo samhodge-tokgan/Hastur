@@ -81,9 +81,9 @@ void OrtSessionManager::Handle::Build() {
           OrtMemoryInfo* mem = nullptr;
           Ort::ThrowOnError(Ort::GetApi().CreateMemoryInfo(
               "Cuda", OrtArenaAllocator, 0, OrtMemTypeDefault, &mem));
-          Ort::GetApi().CreateAndRegisterAllocatorV2(
+          Ort::ThrowOnError(Ort::GetApi().CreateAndRegisterAllocatorV2(
               static_cast<OrtEnv*>(impl.env), "CUDAExecutionProvider", mem,
-              arena_cfg, nullptr, 0);
+              arena_cfg, /*keys=*/nullptr, /*values=*/nullptr, /*num_keys=*/0));
           Ort::GetApi().ReleaseMemoryInfo(mem);
           Ort::GetApi().ReleaseArenaCfg(arena_cfg);
           impl.cuda_arena_registered = true;
