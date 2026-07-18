@@ -1,10 +1,14 @@
 // Copyright the Hastur authors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Registration glue for the single .ofx binary. For M0 the bundle registers one
-// plugin (the SAM 3D Body effect) from OFX::Plugin::getPluginIDs. As additional
+// Registration glue for the single .ofx binary. The bundle registers one plugin
+// (the SAM 3D Body effect) from OFX::Plugin::getPluginIDs. As additional
 // stages/effects land they can each expose an append<Name>() here and be pushed
 // into the host's plugin list alongside it (mirroring humbaba's multi-plugin bundle).
+//
+// (M4: the M0 ORT-liveness anchor that once forced a link dependency on the
+// bundled ONNX Runtime is gone — the real detector/body/pose-corrective sessions
+// in Sam3dBodyPipeline now make libonnxruntime_hastur a genuine dependency.)
 #pragma once
 
 #include "ofxsImageEffect.h"

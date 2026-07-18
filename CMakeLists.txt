@@ -219,10 +219,21 @@ elseif(UNIX)
 endif()
 
 if(HASTUR_WITH_ONNX)
-  # TODO(models): the inference engine sources (person detector / SAM 3D body ViT /
-  # hand ViT / MHR mesh recovery / software rasterizer) land in later milestones and
-  # get added to target_sources here. For M0 the plugin is a pure passthrough and only
-  # the ORT bundling/isolation machinery below is exercised.
+  # M4: the full body-only pipeline. Every stage engine authored in isolation is
+  # compiled into the plugin module and orchestrated by Sam3dBodyPipeline.
+  target_sources(Sam3dBody PRIVATE
+    src/DetectorEngine.cpp
+    src/Sam3dBodyEngine.cpp
+    src/MhrModel.cpp
+    src/MeshAssets.cpp
+    src/CropAffine.cpp
+    src/CameraSolver.cpp
+    src/OrtSessionManager.cpp
+    src/SoftwareRasterizer.cpp
+    src/Sam3dBodyPipeline.cpp
+  )
+  # Engine headers live in src/; MhrModel needs the header-only Eigen.
+  target_include_directories(Sam3dBody PRIVATE src "${eigen_SOURCE_DIR}")
   if(WIN32)
     # onnxruntime.dll and its dependents live next to the .ofx (Contents/Win64),
     # which the loader does NOT search by default for a LoadLibrary'd plugin.
@@ -336,15 +347,17 @@ endif()
 # build). SAM 3D Body is a MODEL-LESS plugin: the ONNX models + mesh assets are
 # user-generated locally (or fetched with tools/fetch_models.{sh,ps1}), not committed.
 #
-# TODO(models): wire up per-model bundling once the export pipeline exists. The Hastur
-# model set that resolves into Contents/Resources is:
+# TODO(models): wire up per-model bundling once the export pipeline is pinned. The
+# BODY-ONLY (M4) pipeline resolves these four files from Contents/Resources (or
+# $HASTUR_MODEL_DIR / the model-dir param):
 #   - person_detector.onnx   (person / bbox detector, first stage)
-#   - sam3dbody_body.onnx     (SAM 3D body ViT)
-#   - sam3dbody_hand.onnx     (hand ViT)
-#   - mhr_assets.bin          (MHR mesh-recovery template / regressor assets)
-#   - pose_corrective.onnx    (pose-corrective refinement)
-# Add one HASTUR_<MODEL>_FILE cache var + copy custom-command per entry, mirroring the
-# ONNX-Runtime bundling block above. Left as a placeholder until the models are pinned.
+#   - sam3dbody_body.onnx     (SAM 3D body ViT regressor)
+#   - mhr_assets.bin          (MHR mesh-recovery static buffers, C++ FK+LBS)
+#   - pose_corrective.onnx    (pose-corrective vertex-offset MLP)
+# (sam3dbody_hand.onnx is added when the hand refiner lands in M7.)
+# Dev-time these are staged manually into Contents/Resources or pointed at via
+# HASTUR_MODEL_DIR. Add one HASTUR_<MODEL>_FILE cache var + copy custom-command per
+# entry (mirroring the ONNX-Runtime bundling block above) once the models are pinned.
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
@@ -367,6 +380,38 @@ if(HASTUR_WITH_ONNX)
       BUILD_RPATH "${ORT_DIR}/lib"
       INSTALL_RPATH "${ORT_DIR}/lib"
     )
+  endif()
+
+  # ---------------------------------------------------------------------------
+  # pipeline_smoke: offline end-to-end exercise of Sam3dBodyPipeline (no OFX
+  # host). Compiles the same engine sources as the plugin + a stb-based image
+  # I/O harness. Run: pipeline_smoke <in.jpg> <out.png> [model_search_path].
+  # ---------------------------------------------------------------------------
+  add_executable(pipeline_smoke
+    tools/pipeline_smoke.cpp
+    src/DetectorEngine.cpp
+    src/Sam3dBodyEngine.cpp
+    src/MhrModel.cpp
+    src/MeshAssets.cpp
+    src/CropAffine.cpp
+    src/CameraSolver.cpp
+    src/OrtSessionManager.cpp
+    src/SoftwareRasterizer.cpp
+    src/Sam3dBodyPipeline.cpp
+  )
+  target_include_directories(pipeline_smoke PRIVATE src tools "${eigen_SOURCE_DIR}")
+  target_link_libraries(pipeline_smoke PRIVATE onnxruntime ${HASTUR_FS_LIB})
+  if(WIN32)
+    file(GLOB ORT_ALL_DLLS2 "${ORT_DIR}/lib/*.dll")
+    foreach(dll ${ORT_ALL_DLLS2})
+      add_custom_command(TARGET pipeline_smoke POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${dll}" "$<TARGET_FILE_DIR:pipeline_smoke>"
+        VERBATIM)
+    endforeach()
+  else()
+    set_target_properties(pipeline_smoke PROPERTIES
+      BUILD_RPATH "${ORT_DIR}/lib"
+      INSTALL_RPATH "${ORT_DIR}/lib")
   endif()
 endif()
 
