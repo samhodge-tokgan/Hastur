@@ -5,15 +5,36 @@ human-mesh-recovery pipeline through **ONNX Runtime** — the **CoreML** executi
 **CUDA** execution provider on Linux/Windows (NVIDIA), with automatic CPU fallback. It reconstructs posed 3D human
 mesh(es) from a single frame and renders them **in neutral grey with a coverage alpha, at the input-frame resolution**.
 
-> **Status: early development (M0 — bootstrap).** Private until the **0.1.0** release, then public. This is the
-> SAM-3D-Body counterpart to [humbaba](https://github.com/samhodge-tokgan/humbaba) (which does the same for the
-> DepthAnything3 depth model) and reuses its cross-platform ORT/OFX scaffold.
+> **Status: working end-to-end — v0.1.0 in preparation.** The full **multi-person + hands** pipeline runs and renders
+> on **macOS (CoreML/CPU), Linux (CUDA) and Windows (CUDA)**. This is the SAM-3D-Body counterpart to
+> [humbaba](https://github.com/samhodge-tokgan/humbaba) (DepthAnything3) and reuses its cross-platform ORT/OFX scaffold.
 
 - **Input:** RGB(A) frame buffer (sRGB display-referred or ACEScg working space).
 - **Output:** an **RGBA** render — neutral-grey shaded humanoid mesh(es) over a transparent (coverage-alpha)
   background, at the input resolution. This is the C++/ORT equivalent of the reference
   `Renderer.__call__(..., return_rgba=True)`.
 - **Acceleration:** ONNX Runtime — CoreML EP (macOS), CUDA EP (Linux/Windows), CPU fallback everywhere.
+
+## Validation
+
+The full pipeline is built and run end-to-end on all three platforms:
+
+| Platform | Build | Accelerator | Runtime | Body-regressor |
+|---|:---:|---|:---:|---|
+| **macOS** arm64 (Apple Silicon) | ✅ | CoreML / CPU | ✅ end-to-end render | ~38 s (CPU-bound¹) |
+| **Linux** x86-64 (RTX 3090) | ✅ | **CUDA** | ✅ on-GPU, no fallback | **~0.3 s (~100×)** |
+| **Windows** x64 (RTX 3090) | ✅ | **CUDA** | ✅ on-GPU, no fallback | **~1.15 s (~33×)** |
+
+Numeric parity vs the Python reference (fixed bbox): `pred` Pearson **0.999999**, cam_t **0.09 %**, keypoints **1.0 px**,
+silhouette IoU **0.97**. ¹On macOS the MHR-refinement ops (GridSample/Scatter/…) fragment the CoreML graph, so the body
+stage runs on CPU; CUDA supports them → the large Linux/Windows GPU speedups. (In-host GUI screenshots — Natron/Nuke/… — to follow.)
+
+<p align="center">
+  <img src="docs/screenshots/multiperson.png" width="440" alt="Four recovered meshes depth-composited over the source frame"><br>
+  <em>Multi-person — four meshes recovered and depth-ordered over the source.</em><br><br>
+  <img src="docs/screenshots/hands_before_after.png" width="360" alt="Hand refiner: splayed default (left) vs articulated (right)">
+  <img src="docs/screenshots/macos_coreml_yoga.png" width="200" alt="Grey mesh + coverage alpha (seated yoga)">
+</p>
 
 ## Pipeline
 

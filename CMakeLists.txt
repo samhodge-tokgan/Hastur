@@ -413,6 +413,13 @@ if(HASTUR_WITH_ONNX)
     src/Sam3dBodyPipeline.cpp
   )
   target_include_directories(pipeline_smoke PRIVATE src tools "${eigen_SOURCE_DIR}")
+  # MSVC needs _USE_MATH_DEFINES for M_PI (CameraSolver.cpp). The plugin target defines
+  # it (below), but pipeline_smoke didn't — so Windows CI (which builds the plugin, not
+  # the smoke tool) stayed green while the harness failed to compile. Caught by the
+  # winbox CUDA smoke.
+  if(MSVC)
+    target_compile_definitions(pipeline_smoke PRIVATE _USE_MATH_DEFINES NOMINMAX)
+  endif()
   target_link_libraries(pipeline_smoke PRIVATE onnxruntime ${HASTUR_FS_LIB})
   if(WIN32)
     file(GLOB ORT_ALL_DLLS2 "${ORT_DIR}/lib/*.dll")
