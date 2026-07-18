@@ -53,6 +53,21 @@ class MhrModel {
   Mesh Run(const std::array<float, kParamDim>& pred,
            const float* pose_corrective = nullptr) const;
 
+  // Wrist-gate geometry for the M7 hand-refiner's wrist-angle criterion, computed
+  // from a body pred[519] (sam3d_body.run_inference, "CRITERIA 1"):
+  //   * ori_local[side]   = roma.euler_to_rotmat("XZY", body_pose[wrist eulers])
+  //                         for side 0=left (params 41,43,42), 1=right (31,33,32).
+  //   * lowarm_global[side]= the FK global joint rotation at the lower-arm joints
+  //                         [76=left, 40=right] (== joint_global_rots there).
+  // Both are row-major 3x3. The refiner combines lowarm_global with the model's
+  // joint_rotation[wrist_twist] and the hand decoder's wrist_global to form the
+  // fused local wrist rotation and compare its angle to ori_local.
+  struct WristGate {
+    std::array<std::array<float, 9>, 2> ori_local{};
+    std::array<std::array<float, 9>, 2> lowarm_global{};
+  };
+  WristGate ComputeWristGate(const std::array<float, kParamDim>& pred) const;
+
  private:
   std::shared_ptr<const MeshAssets> a_;
 

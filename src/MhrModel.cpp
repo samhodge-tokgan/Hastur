@@ -222,6 +222,35 @@ void compactContToBody(const float cont[260], double body[133]) {
   for (int t = 0; t < 6; ++t) body[kBody1DofTrans[t]] = cont[offT + t];
 }
 
+// quaternion (xyzw) -> row-major 3x3 rotation matrix (roma unitquat_to_rotmat).
+inline void quatToRotmat(const Quat& qin, float out9[9]) {
+  Quat q = quatNormalize(qin);
+  double x = q.x, y = q.y, z = q.z, w = q.w;
+  out9[0] = static_cast<float>(1 - 2 * (y * y + z * z));
+  out9[1] = static_cast<float>(2 * (x * y - z * w));
+  out9[2] = static_cast<float>(2 * (x * z + y * w));
+  out9[3] = static_cast<float>(2 * (x * y + z * w));
+  out9[4] = static_cast<float>(1 - 2 * (x * x + z * z));
+  out9[5] = static_cast<float>(2 * (y * z - x * w));
+  out9[6] = static_cast<float>(2 * (x * z - y * w));
+  out9[7] = static_cast<float>(2 * (y * z + x * w));
+  out9[8] = static_cast<float>(1 - 2 * (x * x + y * y));
+}
+
+// roma.euler_to_rotmat("XZY", [ax,az,ay]) == Rx(ax) @ Rz(az) @ Ry(ay). Row-major.
+inline void eulerXZYToRotmat(double ax, double az, double ay, float out9[9]) {
+  Eigen::Matrix3d Rx, Rz, Ry;
+  double cx = std::cos(ax), sx = std::sin(ax);
+  double cz = std::cos(az), sz = std::sin(az);
+  double cy = std::cos(ay), sy = std::sin(ay);
+  Rx << 1, 0, 0, 0, cx, -sx, 0, sx, cx;
+  Rz << cz, -sz, 0, sz, cz, 0, 0, 0, 1;
+  Ry << cy, 0, sy, 0, 1, 0, -sy, 0, cy;
+  Eigen::Matrix3d R = Rx * Rz * Ry;
+  for (int r = 0; r < 3; ++r)
+    for (int c = 0; c < 3; ++c) out9[r * 3 + c] = static_cast<float>(R(r, c));
+}
+
 void compactContToHand(const double hand_cont[54], double hand_mp[27]) {
   for (int i = 0; i < 27; ++i) hand_mp[i] = 0.0;
   int cpos = 0;   // position in cont (54)
@@ -503,6 +532,63 @@ Mesh MhrModel::Run(const std::array<float, kParamDim>& pred,
 
   mesh.faces = a_->faces();
   return mesh;
+}
+
+MhrModel::WristGate MhrModel::ComputeWristGate(
+    const std::array<float, kParamDim>& pred) const {
+  WristGate g;
+
+  // --- ori_local: body-decoder local wrist rotmats from the body pose eulers ---
+  // body133 model params (compactContToBody keeps the wrist indices; only hand +
+  // jaw params get zeroed elsewhere, and none of those overlap the wrist eulers).
+  float cont[260];
+  for (int i = 0; i < 260; ++i) cont[i] = pred[kGlobal6D + i];
+  double body133[133];
+  compactContToBody(cont, body133);
+  // left wrist  = params (41,43,42) -> XZY;  right wrist = params (31,33,32) -> XZY.
+  eulerXZYToRotmat(body133[41], body133[43], body133[42], g.ori_local[0].data());
+  eulerXZYToRotmat(body133[31], body133[33], body133[32], g.ori_local[1].data());
+
+  // --- lowarm_global: FK global joint rotation at joints [76 (L), 40 (R)] ---
+  std::array<float, 204> model_params;
+  std::array<float, kShapeComps> shape;
+  std::array<float, 889> jp;
+  DecodeInternal(pred, model_params, shape, jp);
+
+  const int J = J_;
+  const float* jto = a_->f32("joint_translation_offsets");
+  const float* jpr = a_->f32("joint_prerotations");
+  std::vector<Skel> glob(J);
+  for (int j = 0; j < J; ++j) {
+    const float* jpar = &jp[j * 7];
+    Skel s;
+    s.t = Vec3d(jpar[0] + jto[j * 3 + 0], jpar[1] + jto[j * 3 + 1],
+                jpar[2] + jto[j * 3 + 2]);
+    Quat qe = eulerXyzToQuat(jpar[3], jpar[4], jpar[5]);
+    Quat pre{jpr[j * 4 + 0], jpr[j * 4 + 1], jpr[j * 4 + 2], jpr[j * 4 + 3]};
+    s.q = quatMul(pre, qe);
+    s.s = std::exp(static_cast<double>(jpar[6]) * kLn2);
+    glob[j] = s;
+  }
+  const int64_t* pmi = a_->i64("pmi");
+  const int32_t* pmi_sizes = a_->i32("pmi_buffer_sizes");
+  const int nlev = static_cast<int>(a_->block("pmi_buffer_sizes").shape[0]);
+  const int64_t* src_row = pmi;
+  const int64_t* tgt_row = pmi + 266;
+  int col = 0;
+  for (int lvl = 0; lvl < nlev; ++lvl) {
+    int k = pmi_sizes[lvl];
+    std::vector<Skel> updated(k);
+    for (int e = 0; e < k; ++e)
+      updated[e] = skelMultiply(glob[tgt_row[col + e]], glob[src_row[col + e]]);
+    for (int e = 0; e < k; ++e) glob[src_row[col + e]] = updated[e];
+    col += k;
+  }
+  const int lowarm[2] = {76, 40};  // left, right
+  for (int side = 0; side < 2; ++side)
+    quatToRotmat(glob[lowarm[side]].q, g.lowarm_global[side].data());
+
+  return g;
 }
 
 }  // namespace hastur

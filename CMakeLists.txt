@@ -224,6 +224,7 @@ if(HASTUR_WITH_ONNX)
   target_sources(Sam3dBody PRIVATE
     src/DetectorEngine.cpp
     src/Sam3dBodyEngine.cpp
+    src/HandRefinerEngine.cpp
     src/MhrModel.cpp
     src/MeshAssets.cpp
     src/CropAffine.cpp
@@ -354,7 +355,9 @@ endif()
 #   - sam3dbody_body.onnx     (SAM 3D body ViT regressor)
 #   - mhr_assets.bin          (MHR mesh-recovery static buffers, C++ FK+LBS)
 #   - pose_corrective.onnx    (pose-corrective vertex-offset MLP)
-# (sam3dbody_hand.onnx is added when the hand refiner lands in M7.)
+# The M7 hand refiner adds two OPTIONAL files (absence -> graceful body-only):
+#   - sam3dbody_hand.onnx     (hand-decoder 2nd pass; tools/export_hand.py)
+#   - mhr_wrist.bin           (wrist-twist joint_rotation[77,41], wrist-angle gate)
 # Dev-time these are staged manually into Contents/Resources or pointed at via
 # HASTUR_MODEL_DIR. Add one HASTUR_<MODEL>_FILE cache var + copy custom-command per
 # entry (mirroring the ONNX-Runtime bundling block above) once the models are pinned.
@@ -391,6 +394,7 @@ if(HASTUR_WITH_ONNX)
     tools/pipeline_smoke.cpp
     src/DetectorEngine.cpp
     src/Sam3dBodyEngine.cpp
+    src/HandRefinerEngine.cpp
     src/MhrModel.cpp
     src/MeshAssets.cpp
     src/CropAffine.cpp
