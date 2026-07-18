@@ -22,13 +22,28 @@ jobs:
       - name: Check required files exist
         run: |
           set -euo pipefail
-          for f in LICENSE CMakeLists.txt .gitignore docs/HOST_COMPATIBILITY.md; do
+          for f in LICENSE NOTICE CMakeLists.txt .gitignore docs/HOST_COMPATIBILITY.md; do
             test -f "$f" || { echo "missing $f"; exit 1; }
           done
           echo "Repo sanity OK"
 
-      - name: Confirm LICENSE is Apache-2.0
-        run: grep -q "Apache License" LICENSE && grep -q "Version 2.0" LICENSE
+      - name: Confirm LICENSE is the SAM License
+        run: |
+          set -euo pipefail
+          # Hastur is a derivative of Meta SAM 3D Body and ships under the SAM License.
+          grep -q "SAM License" LICENSE
+          grep -q "SAM License" NOTICE
+          echo "LICENSE/NOTICE reference the SAM License"
+
+      - name: Confirm source SPDX headers reference the SAM License
+        run: |
+          set -euo pipefail
+          # No source file should still declare Apache-2.0 after the relicense.
+          if grep -rn "SPDX-License-Identifier: Apache-2.0" src tools tests 2>/dev/null; then
+            echo "ERROR: stale Apache-2.0 SPDX header(s) found above" >&2
+            exit 1
+          fi
+          echo "No stale Apache-2.0 SPDX headers"
 
   build:
     name: Build .ofx bundle (ONNX/CoreML, arm64)
