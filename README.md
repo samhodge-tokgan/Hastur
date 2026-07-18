@@ -27,9 +27,11 @@ The full pipeline is built and run end-to-end on all three platforms:
 
 Numeric parity vs the Python reference (fixed bbox): `pred` Pearson **0.999999**, cam_t **0.09 %**, keypoints **1.0 px**,
 silhouette IoU **0.97**. ¹On macOS the MHR-refinement ops (GridSample/Scatter/…) fragment the CoreML graph, so the body
-stage runs on CPU; CUDA supports them → the large Linux/Windows GPU speedups. (In-host GUI screenshots — Natron/Nuke/… — to follow.)
+stage runs on CPU; CUDA supports them → the large Linux/Windows GPU speedups. Verified in-host in **Nuke 16 on macOS** (below).
 
 <p align="center">
+  <img src="docs/screenshots/nuke_macos.png" width="640" alt="SAM 3D Body node in Nuke 16 (macOS): grey clay mesh composited over the source plate"><br>
+  <em>In-host: the <code>SAM 3D Body</code> OFX node in Nuke 16 (macOS) — grey clay mesh composited over the source plate.</em><br><br>
   <img src="docs/screenshots/multiperson.png" width="440" alt="Four recovered meshes depth-composited over the source frame"><br>
   <em>Multi-person — four meshes recovered and depth-ordered over the source.</em><br><br>
   <img src="docs/screenshots/hands_before_after.png" width="360" alt="Hand refiner: splayed default (left) vs articulated (right)">
