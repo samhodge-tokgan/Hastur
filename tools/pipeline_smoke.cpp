@@ -77,6 +77,10 @@ int main(int argc, char** argv) {
   p.grey = 0.6f;
   p.ssaa = 2;
   p.premultiply = false;
+  // Optional env overrides so the harness can drive the multi-person path
+  // (M8) without recompiling. Defaults keep the single-person behavior.
+  if (const char* e = std::getenv("HASTUR_SMOKE_MAXPEOPLE")) p.max_people = std::atoi(e);
+  if (const char* e = std::getenv("HASTUR_SMOKE_SCORE")) p.detector_score_thresh = std::atof(e);
 
   hastur::Sam3dBodyPipeline pipe;
   hastur::FrameResult fr = pipe.Run(rgb.data(), fw, fh, p);
@@ -127,6 +131,34 @@ int main(int argc, char** argv) {
   if (!stbi_write_png(out_path.c_str(), fw, fh, 4, png.data(), fw * 4)) {
     std::fprintf(stderr, "failed to write PNG: %s\n", out_path.c_str());
     return 1;
+  }
+
+  // Also write an RGB "over source" composite (grey mesh over the input frame)
+  // for a quick visual depth-order check. Straight-alpha render assumed
+  // (p.premultiply == false): out = mesh_rgb*a + src*(1-a).
+  {
+    std::string over_path = out_path;
+    const size_t dot = over_path.find_last_of('.');
+    over_path.insert(dot == std::string::npos ? over_path.size() : dot, "_over");
+    std::vector<unsigned char> over(static_cast<size_t>(fw) * fh * 3);
+    for (int y = 0; y < fh; ++y) {
+      for (int x = 0; x < fw; ++x) {
+        const size_t pi = (static_cast<size_t>(y) * fw + x);
+        const float a = R[pi * 4 + 3];
+        for (int c = 0; c < 3; ++c) {
+          float m = R[pi * 4 + c];
+          float sval = rgb[pi * 3 + c];
+          float v = m * a + sval * (1.f - a);
+          if (v < 0.f) v = 0.f;
+          if (v > 1.f) v = 1.f;
+          over[pi * 3 + c] = static_cast<unsigned char>(v * 255.f + 0.5f);
+        }
+      }
+    }
+    if (!stbi_write_png(over_path.c_str(), fw, fh, 3, over.data(), fw * 3))
+      std::fprintf(stderr, "failed to write over-source PNG: %s\n", over_path.c_str());
+    else
+      std::fprintf(stderr, "wrote over-source composite: %s\n", over_path.c_str());
   }
 
   std::printf("SMOKE OK\n");
