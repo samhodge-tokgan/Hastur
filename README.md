@@ -1,12 +1,18 @@
 # Hastur — SAM 3D Body as an OpenFX plugin
 
+<p align="center">
+  <img src="docs/banner.gif" width="340" alt="SAM 3D Body OFX plugin output: a neutral-grey clay mesh recovered from and composited over a wakesurfer, rendered in Autodesk Flame on Linux via CUDA"><br>
+  <em>Plugin output rendered in <b>Autodesk Flame 2027 (Linux · CUDA)</b> — the recovered grey mesh composited over the source.</em>
+</p>
+
 A hardware-accelerated **OpenFX** plugin that runs Meta's **[SAM 3D Body](https://github.com/facebookresearch/sam-3d-body)**
 human-mesh-recovery pipeline through **ONNX Runtime** — the **CoreML** execution provider on Apple Silicon and the
 **CUDA** execution provider on Linux/Windows (NVIDIA), with automatic CPU fallback. It reconstructs posed 3D human
 mesh(es) from a single frame and renders them **in neutral grey with a coverage alpha, at the input-frame resolution**.
 
-> **Status: working end-to-end — v0.1.0 in preparation.** The full **multi-person + hands** pipeline runs and renders
-> on **macOS (CoreML/CPU), Linux (CUDA) and Windows (CUDA)**. This is the SAM-3D-Body counterpart to
+> **Status: v0.1.0 released.** The full **multi-person + hands** pipeline runs and renders
+> on **macOS (CoreML/CPU), Linux (CUDA) and Windows (CUDA)**, and is validated in-host in **Nuke 16 (macOS)** and
+> **Autodesk Flame 2027 (Linux/CUDA)**. This is the SAM-3D-Body counterpart to
 > [humbaba](https://github.com/samhodge-tokgan/humbaba) (DepthAnything3) and reuses its cross-platform ORT/OFX scaffold.
 
 - **Input:** RGB(A) frame buffer (sRGB display-referred or ACEScg working space).
