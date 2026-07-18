@@ -16,6 +16,7 @@
 # Models & assets (model-less: generated locally, never committed)
 *.onnx
 *.onnx_data
+*.onnx.data
 *.pt
 *.ckpt
 *.pkl
@@ -24,6 +25,9 @@ mhr_assets.bin
 /checkpoints/
 /models/
 .cache/
+# generated validation fixtures / asset blobs (model-less; never committed)
+test-assets/*.bin
+test-assets/fixtures/
 
 # Python
 __pycache__/
