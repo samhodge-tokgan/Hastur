@@ -105,6 +105,32 @@ if(HASTUR_WITH_ONNX)
 endif()
 
 # ---------------------------------------------------------------------------
+# Eigen (header-only, pinned) — linear algebra for the MHR mesh model (Track C).
+# NOTE(track-c): this block is owned by the MHR mesh track; it only adds the
+# header-only Eigen dependency + the MhrModel library/validation target and does
+# not touch the OpenFX / ONNX-Runtime machinery above. Populate-only (Eigen's own
+# CMake is heavy and unneeded for header-only use).
+# ---------------------------------------------------------------------------
+FetchContent_Declare(eigen
+  GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+  GIT_TAG 3.4.0
+  GIT_SHALLOW TRUE
+  SOURCE_SUBDIR none-existent-so-populate-only
+)
+FetchContent_MakeAvailable(eigen)
+
+# MHR parametric body model: mhr_assets.bin loader + Eigen LBS. Dependency-light
+# (no OFX / ORT), so it builds and unit-tests standalone.
+add_library(hastur_mhr STATIC src/MeshAssets.cpp src/MhrModel.cpp)
+target_include_directories(hastur_mhr PUBLIC src "${eigen_SOURCE_DIR}")
+set_target_properties(hastur_mhr PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# Oracle-vs-C++ mesh validation (per-vertex RMSE in mm). Run against the
+# generated test-assets: mhr_validate <mhr_assets.bin> <fixtures.bin>.
+add_executable(mhr_validate tests/mhr_validate.cpp)
+target_link_libraries(mhr_validate PRIVATE hastur_mhr)
+
+# ---------------------------------------------------------------------------
 # OpenFX C++ Support library
 # ---------------------------------------------------------------------------
 add_library(ofxsupport STATIC
