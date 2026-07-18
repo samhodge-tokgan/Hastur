@@ -34,9 +34,28 @@ thing runs headless inside a host process on three platforms.
 ## Models (model-less install)
 
 Hastur ships **no model weights**. Meta's SAM-3D-Body weights are gated on Hugging Face and covered by the custom
-**SAM License**; you download them yourself (with your own HF token) and run the provided `tools/` scripts to export
-the ONNX graphs and extract the MHR static assets into the plugin bundle's `Contents/Resources`. See
-[`docs/MODELS.md`](docs/MODELS.md) (TODO) and `tools/`.
+**SAM License**; you download them yourself (with your own HF token) and **generate** the plugin's ONNX graphs +
+MHR static assets locally. Install flow:
+
+1. **Install the plugin** — run the platform installer (`Sam3dBody-<ver>-macos-arm64.pkg`, built by
+   [`packaging/make_pkg.sh`](packaging/make_pkg.sh)) or `cmake --install build`. This stages the plugin into your OFX
+   plugin dir — **no weights**.
+2. **Generate the models** from your own gated checkpoints with the single wire-up script:
+   ```sh
+   tools/convert_models.sh \
+       --ckpt-dir  /path/to/sam-3d-body/checkpoints/sam-3d-body-dinov3 \
+       --out-dir   ~/Library/OFX/Plugins/Sam3dBody.ofx.bundle/Contents/Resources \
+       --python    /path/to/torch-env/bin/python
+   ```
+   (Windows: `tools\convert_models.ps1`.) It runs the `tools/export_*` / `extract_mhr_assets` scripts in order to
+   produce `person_detector.onnx`, `sam3dbody_body.onnx`, `sam3dbody_hand.onnx`, `mhr_assets.bin`,
+   `pose_corrective.onnx`, `mhr_wrist.bin` (+ json sidecars). The body/hand ViT exports take **hours**.
+3. **The plugin finds them** in the bundle's `Contents/Resources`, or in `$HASTUR_MODEL_DIR`, or the *Model directory*
+   plugin param.
+
+`tools/fetch_models.{sh,ps1}` is now a thin pointer to `convert_models` (plus an optional `HASTUR_MODELS_BASE_URL`
+mirror hook if you host a pre-generated set yourself). See [`docs/MODELS.md`](docs/MODELS.md) for the full flow,
+parameters, and legal posture.
 
 ## Licensing
 

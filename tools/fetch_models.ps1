@@ -2,44 +2,45 @@
 Copyright the Hastur authors.
 SPDX-License-Identifier: Apache-2.0
 
-fetch_models.ps1 — download/stage the SAM 3D Body ONNX models + mesh assets into the
+fetch_models.ps1 — stage the SAM 3D Body ONNX models + mesh assets into the
 installed Sam3dBody.ofx.bundle's Contents\Resources.
 
-NOTE: Hastur is MODEL-LESS by design. The models below are USER-GENERATED locally
-(exported from the SAM 3D Body checkpoints, or pulled from a private mirror you
-control) — they are NOT committed and there is no public release tag yet. The manifest
-checksums/sizes are placeholders (TODO) to be pinned once the export pipeline produces
-stable weights. The download plumbing (gh / GITHUB_TOKEN / curl, HF mirror override) is
-kept from humbaba so a gated release can drop straight in.
+── Hastur is MODEL-LESS ──────────────────────────────────────────────────────
+Hastur ships NO Meta weights. The runtime assets are DERIVED from Meta's gated
+SAM-3D-Body checkpoints (SAM License + embedded DINOv3 gated terms), which we must
+NOT redistribute. So the PRIMARY path is to GENERATE them locally from your own
+licensed copy:
+
+    .\tools\convert_models.ps1 -CkptDir <checkpoints> -OutDir <Resources> -Python <env>
+
+This script therefore does NOT download from a Hastur release (there is none — it
+would redistribute derived Meta weights). It only (a) points you at convert_models
+(the default, no-arg behaviour), and (b) OPTIONALLY pulls a set you already
+generated from a mirror YOU host, via -BaseUrl / $env:HASTUR_MODELS_BASE_URL.
 
 Usage:
-  .\fetch_models.ps1 [-ResourcesDir <path>] [-Tag models-v1] [-BaseUrl <url>]
+  .\fetch_models.ps1 [-ResourcesDir <path>]                     # prints generate-locally guidance
+  .\fetch_models.ps1 -BaseUrl https://your-mirror/path [-ResourcesDir <path>]
 
 With no -ResourcesDir it locates the installed bundle in the standard OFX dirs.
-Writing to %CommonProgramFiles%\OFX\Plugins needs an elevated PowerShell.
 #>
 [CmdletBinding()]
 param(
   [string]$ResourcesDir,
-  [string]$Tag = $(if ($env:HASTUR_MODELS_TAG) { $env:HASTUR_MODELS_TAG } else { "models-v1" }),
-  [string]$BaseUrl
+  [string]$BaseUrl = $env:HASTUR_MODELS_BASE_URL
 )
 
 $ErrorActionPreference = "Stop"
-$repo = "samhodge-tokgan/Hastur"
-if (-not $BaseUrl) {
-  $BaseUrl = if ($env:HASTUR_MODELS_BASE_URL) { $env:HASTUR_MODELS_BASE_URL }
-             else { "https://github.com/$repo/releases/download/$Tag" }
-}
 
-# asset name, installed filename, sha256, bytes.
-# TODO(models): fill in the real sha256 + byte size once the models are pinned.
+# The user-generated model set. No pinned checksums: generated on YOUR machine /
+# mirror, not distributed by Hastur. A mirror may host an optional <name>.sha256
+# sidecar which, when present, is verified.
 $models = @(
-  @{ asset="person_detector.onnx";  name="person_detector.onnx";  sha="TODO"; bytes=0 },
-  @{ asset="sam3dbody_body.onnx";   name="sam3dbody_body.onnx";   sha="TODO"; bytes=0 },
-  @{ asset="sam3dbody_hand.onnx";   name="sam3dbody_hand.onnx";   sha="TODO"; bytes=0 },
-  @{ asset="mhr_assets.bin";        name="mhr_assets.bin";        sha="TODO"; bytes=0 },
-  @{ asset="pose_corrective.onnx";  name="pose_corrective.onnx";  sha="TODO"; bytes=0 }
+  "person_detector.onnx", "person_detector.json",
+  "sam3dbody_body.onnx",
+  "sam3dbody_hand.onnx", "sam3dbody_hand.json",
+  "mhr_assets.bin", "mhr_assets.manifest.json",
+  "pose_corrective.onnx", "mhr_wrist.bin"
 )
 
 function Find-Resources {
@@ -64,40 +65,50 @@ $res = Find-Resources -Dir $ResourcesDir
 if (-not $res) {
   throw "Could not find Sam3dBody.ofx.bundle in the standard OFX dirs. Pass -ResourcesDir <bundle>\Contents\Resources."
 }
-New-Item -ItemType Directory -Force $res | Out-Null
 
-Write-Host "Installing models into: $res"
-Write-Host "Source: $BaseUrl"
-foreach ($m in $models) {
-  $dest = Join-Path $res $m.name
-  if ($m.sha -eq "TODO") {
-    Write-Host "  [todo] $($m.name) — no pinned checksum yet (model-less; stage it locally)"
-    continue
-  }
-  if (Test-Path $dest) {
-    $h = (Get-FileHash -Algorithm SHA256 $dest).Hash.ToLower()
-    if ($h -eq $m.sha) { Write-Host "  [skip] $($m.name) (already present, checksum OK)"; continue }
-  }
-  Write-Host "  [get]  $($m.asset) -> $($m.name) ($($m.bytes) bytes)"
+# ── primary path: no mirror configured -> generate locally ───────────────────
+if (-not $BaseUrl) {
+  Write-Host "Hastur is model-less: there is no download of Meta-derived weights." -ForegroundColor Yellow
+  Write-Host ""
+  Write-Host "Generate the model set LOCALLY from your own gated SAM-3D-Body checkpoints:"
+  Write-Host ""
+  Write-Host "  .\tools\convert_models.ps1 ``"
+  Write-Host "      -CkptDir C:\path\sam-3d-body\checkpoints\sam-3d-body-dinov3 ``"
+  Write-Host "      -OutDir  `"$res`" ``"
+  Write-Host "      -Python  C:\path\torch-env\Scripts\python.exe"
+  Write-Host ""
+  Write-Host "See docs\MODELS.md for the full flow. To instead pull a set you already"
+  Write-Host "generated onto a mirror you host, set -BaseUrl / `$env:HASTUR_MODELS_BASE_URL."
+  exit 2
+}
+
+# ── optional mirror path: pull user-generated assets from your own host ──────
+New-Item -ItemType Directory -Force $res | Out-Null
+Write-Host "Staging user-generated models into: $res"
+Write-Host "Mirror: $BaseUrl"
+$hdr = @()
+if ($env:GITHUB_TOKEN) { $hdr = @("-H", "Authorization: token $($env:GITHUB_TOKEN)") }
+foreach ($name in $models) {
+  $dest = Join-Path $res $name
   $tmp = "$dest.part"
-  # Prefer the GitHub CLI, which handles auth for a gated/private release; fall back to
-  # a plain/token'd curl of the download URL.
-  $gh = Get-Command gh -ErrorAction SilentlyContinue
-  if ($gh -and (gh auth status 2>$null; $LASTEXITCODE -eq 0)) {
-    & gh release download $Tag --repo $repo --pattern $m.asset --output $tmp --clobber
-    if ($LASTEXITCODE -ne 0) { throw "gh release download failed for $($m.asset)" }
-  } else {
-    $hdr = @()
-    if ($env:GITHUB_TOKEN) { $hdr = @("-H", "Authorization: token $($env:GITHUB_TOKEN)") }
-    & curl.exe -fL --retry 3 --progress-bar @hdr -o $tmp "$BaseUrl/$($m.asset)"
-    if ($LASTEXITCODE -ne 0) { throw "download failed for $($m.asset)" }
+  Write-Host "  [get]  $name"
+  & curl.exe -fL --retry 3 --progress-bar @hdr -o $tmp "$BaseUrl/$name"
+  if ($LASTEXITCODE -ne 0) {
+    Remove-Item $tmp -ErrorAction SilentlyContinue
+    Write-Host "  [warn] $name not on mirror (skipping)"; continue
   }
-  $got = (Get-FileHash -Algorithm SHA256 $tmp).Hash.ToLower()
-  if ($got -ne $m.sha) {
-    Remove-Item $tmp -Force
-    throw "checksum mismatch for $($m.asset): expected $($m.sha), got $got"
+  $wantRaw = & curl.exe -fsSL @hdr "$BaseUrl/$name.sha256" 2>$null
+  if ($LASTEXITCODE -eq 0 -and $wantRaw) {
+    $want = ($wantRaw -split '\s+')[0].ToLower()
+    $got = (Get-FileHash -Algorithm SHA256 $tmp).Hash.ToLower()
+    if ($got -ne $want) {
+      Remove-Item $tmp -Force
+      throw "checksum mismatch for $name (want $want got $got)"
+    }
+    Write-Host "  [ok]   $name (sha256 verified)"
+  } else {
+    Write-Host "  [ok]   $name (no sha256 sidecar; unverified)"
   }
   Move-Item -Force $tmp $dest
-  Write-Host "  [ok]   $($m.name) verified"
 }
 Write-Host "Done. Model staging complete for $res"
