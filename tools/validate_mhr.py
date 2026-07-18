@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # validate_mhr.py -- end-to-end validation of the MHR mesh reimplementation.
 #

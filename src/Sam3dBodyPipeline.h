@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // Sam3dBodyPipeline — the M4 integration sync point. Wires every stage engine
 // (person detector -> per-person crop + camera conditioning -> SAM 3D body

@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // Standalone numerical validation harness for Track F geometry. Reads a cases
 // file produced by tools/validate_geometry.py, computes every ported quantity

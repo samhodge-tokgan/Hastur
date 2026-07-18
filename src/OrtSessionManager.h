@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // OrtSessionManager — one shared Ort::Env for the whole pipeline (detector,
 // body regressor, hand refiner, pose-corrective) plus a common GPU memory

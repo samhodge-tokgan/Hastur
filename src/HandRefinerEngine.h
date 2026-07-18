@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // HandRefinerEngine -- ONNX Runtime wrapper around the SAM-3D-Body hand-decoder
 // 2nd pass exported by tools/export_hand.py (M7). It is the direct analogue of

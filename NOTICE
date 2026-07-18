@@ -1,0 +1,56 @@
+Hastur — SAM 3D Body as an OpenFX plugin
+=========================================
+
+Hastur is a derivative work of Meta's SAM 3D Body and is distributed under the
+SAM License (see the LICENSE file), to match the license of the work from which
+it derives.
+
+This product includes third-party components that retain their own licenses.
+Their copyright notices and license terms are preserved as required by those
+licenses, and are acknowledged below.
+
+--------------------------------------------------------------------------------
+SAM 3D Body  (Meta Platforms, Inc.)                       — SAM License
+    https://github.com/facebookresearch/sam-3d-body
+    The pipeline architecture, the exported regressor/hand ONNX graphs, and the
+    orchestration are derived from SAM 3D Body. Governs the combined work (LICENSE).
+
+DINOv3  (Meta Platforms, Inc.)                            — DINOv3 License (Meta)
+    Embedded as the backbone inside the SAM-3D-Body checkpoint. Its own gated
+    Meta license applies to those weights.
+
+MHR / Momentum Human Rig  (Meta Platforms, Inc.)          — Apache-2.0
+    https://github.com/facebookresearch/MHR , facebookresearch/momentum
+    The C++ forward-kinematics + linear-blend-skinning reimplementation
+    (src/MhrModel.*, src/MeshAssets.*) and the extracted static assets derive
+    from MHR.
+
+Detectron2  (Meta Platforms, Inc.)                        — Apache-2.0
+    The reference person detector, replaced at runtime by the detector below.
+
+torchvision ssdlite320_mobilenet_v3_large  (PyTorch)      — BSD-3-Clause
+    The shipped ONNX person detector (weights and export path).
+
+humbaba  (the humbaba authors)                            — Apache-2.0
+    https://github.com/samhodge-tokgan/humbaba
+    The cross-platform OpenFX / ONNX-Runtime build + isolation + packaging + CI
+    scaffold (CMakeLists.txt, src/OrtAccel.h, src/Register.h, src/WinLoader.cpp,
+    packaging/*, tools/fetch_models.*, .github/workflows/*) is adapted from humbaba.
+
+ONNX Runtime  (Microsoft)                                 — MIT
+    Fetched/bundled at build time.
+
+Eigen                                                     — MPL-2.0
+    Fetched at build time; used by src/MhrModel.* (linear algebra).
+
+OpenFX SDK / C++ Support library                          — BSD-3-Clause
+    Fetched at build time (the plugin API + support library).
+
+stb_image / stb_image_write  (Sean Barrett)              — Public Domain / MIT
+    tools/vendor/stb_image*.h (offline smoke-test image I/O only; not in the plugin).
+--------------------------------------------------------------------------------
+
+Hastur ships NO model weights. The ONNX graphs and asset blobs are generated
+locally by the user from their own gated SAM-3D-Body checkpoint (see docs/MODELS.md).
+Whether the *converted* weights may be redistributed is being clarified with Meta
+(opensource@meta.com).

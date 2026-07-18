@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # export_detector.py -- export a clean, commercial-licensed ONNX person detector
 # for the SAM 3D Body pipeline (Track A / M1).

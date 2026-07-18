@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # export_pose_corrective.py -- isolate the MHR pose-corrective MLP (the only
 # learned nonlinearity in the mesh path) into a small standalone ONNX that a

@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // mhr_validate.cpp -- feeds identical pred[519] vectors to the C++ MhrModel and
 // compares the posed mesh to the ONNX/TorchScript oracle fixtures (fixtures.bin),

@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // MeshTypes.h — the FROZEN inter-stage contract for the SAM 3D Body pipeline.
 //

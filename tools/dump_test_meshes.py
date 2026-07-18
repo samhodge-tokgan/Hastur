@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # dump_test_meshes.py -- ground-truth fixtures for the C++ SoftwareRasterizer.
 #

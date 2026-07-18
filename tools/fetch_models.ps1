@@ -1,6 +1,6 @@
 <#
 Copyright the Hastur authors.
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: LicenseRef-SAM-License
 
 fetch_models.ps1 — stage the SAM 3D Body ONNX models + mesh assets into the
 installed Sam3dBody.ofx.bundle's Contents\Resources.

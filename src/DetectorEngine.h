@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // DetectorEngine — thin ONNX Runtime wrapper around the clean, commercial-
 // licensed person detector exported by tools/export_detector.py (torchvision

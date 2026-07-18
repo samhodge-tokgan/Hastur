@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # validate_e2e_parity.py -- M5 end-to-end numeric parity: the C++ Sam3dBodyPipeline
 # vs the Python SAM-3D-Body reference, per detected person.

@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // raster_validate.cpp -- loads the raster fixtures (test-assets/raster_fixtures.bin,
 // produced by tools/dump_test_meshes.py), runs the C++ SoftwareRasterizer, and

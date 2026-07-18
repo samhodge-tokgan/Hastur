@@ -1,5 +1,5 @@
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # mhr_meshmodule.py -- a PURE-TORCH reimplementation of the MHR mesh path
 # (blendshape -> parameter-transform -> local skel state -> FK -> pose-corrective

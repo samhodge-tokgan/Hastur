@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright the Hastur authors.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-SAM-License
 #
 # fetch_models.sh — stage the SAM 3D Body ONNX models + mesh assets into the
 # installed Sam3dBody.ofx.bundle's Contents/Resources.

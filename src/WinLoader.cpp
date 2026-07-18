@@ -1,5 +1,5 @@
 // Copyright the Hastur authors.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-SAM-License
 //
 // Windows-only DLL loader glue. The plugin bundles onnxruntime.dll (and its CUDA
 // provider DLLs) next to the .ofx in Contents/Win64. When an OFX host LoadLibrary's

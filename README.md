@@ -80,12 +80,20 @@ parameters, and legal posture.
 
 ## Licensing
 
-- **This plugin (code):** Apache-2.0 (see [`LICENSE`](LICENSE)).
-- **MHR** (body model) and **Detectron2** (reference detector): Apache-2.0.
-- **SAM 3D Body** weights: **SAM License** (Meta) — commercial use is permitted, but redistribution passes the
-  license through and clause 1.b.iv restricts reverse-engineering; treat local ONNX conversion as a derivative work
-  and obtain sign-off before shipping weights. **DINOv3** (embedded in the checkpoint) has its own gated terms.
-  Because Hastur is **model-less**, it never redistributes Meta weights — the user generates them locally.
+Hastur is a **derivative work of Meta's [SAM 3D Body](https://github.com/facebookresearch/sam-3d-body)** and is
+distributed under the **SAM License** (see [`LICENSE`](LICENSE)), to match the license of the work it derives from.
+Note this is a **custom Meta license, not OSI-approved**: commercial use is permitted, but it carries an Acceptable
+Use Policy and a clause (1.b.iv) restricting reverse-engineering — treat local ONNX conversion of the gated weights as
+a derivative work you own.
+
+Third-party components retain their own licenses, attributed in [`NOTICE`](NOTICE): the **humbaba** scaffold, **MHR**,
+and **Detectron2** (Apache-2.0), the **torchvision ssdlite** detector (BSD-3), **ONNX Runtime** (MIT), **Eigen**
+(MPL-2.0), the **OpenFX SDK** (BSD-3), and **stb** (public domain). **DINOv3** (embedded in the SAM-3D-Body checkpoint)
+has its own gated Meta license.
+
+Hastur is **model-less** — it ships no Meta weights; you generate the ONNX/assets locally from your own gated
+checkpoint (see [`docs/MODELS.md`](docs/MODELS.md)). Whether the *converted* weights may be redistributed is being
+clarified with Meta (opensource@meta.com).
 
 ## Roadmap
 
