@@ -486,19 +486,24 @@ void Sam3dBodyFactory::describeInContext(OFX::ImageEffectDescriptor& desc,
   {
     DoubleParamDescriptor* p = desc.defineDoubleParam(kParamScoreThresh);
     p->setLabels("Detector threshold", "Det threshold", "Detector score threshold");
-    p->setHint("Minimum person-detection score.");
+    p->setHint("Minimum person-detection score. The default detector "
+               "(Faster R-CNN R50-FPN) scores real people ~1.0, so a high "
+               "threshold removes flicker and rejects false positives (e.g. "
+               "animals detected as people ~0.7).");
     p->setRange(0.0, 1.0);
     p->setDisplayRange(0.0, 1.0);
-    p->setDefault(0.5);
+    p->setDefault(0.85);
     page->addChild(*p);
   }
   {
     IntParamDescriptor* p = desc.defineIntParam(kParamMaxPeople);
     p->setLabels("Max people", "Max people", "Max people");
-    p->setHint("Cap the per-person loop (M4 default 1).");
+    p->setHint("Cap the per-person loop. Excess low-confidence boxes are "
+               "rejected by the detector threshold, so the default is safe "
+               "for single-subject shots too.");
     p->setRange(1, 32);
     p->setDisplayRange(1, 8);
-    p->setDefault(1);
+    p->setDefault(3);
     page->addChild(*p);
   }
   {

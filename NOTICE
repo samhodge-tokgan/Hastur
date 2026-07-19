@@ -28,8 +28,10 @@ MHR / Momentum Human Rig  (Meta Platforms, Inc.)          — Apache-2.0
 Detectron2  (Meta Platforms, Inc.)                        — Apache-2.0
     The reference person detector, replaced at runtime by the detector below.
 
-torchvision ssdlite320_mobilenet_v3_large  (PyTorch)      — BSD-3-Clause
-    The shipped ONNX person detector (weights and export path).
+torchvision fasterrcnn_resnet50_fpn_v2  (PyTorch)         — BSD-3-Clause
+    The default ONNX person detector (weights and export path). Other
+    torchvision detectors (ssdlite320, retinanet_resnet50_fpn_v2, …) are
+    selectable in tools/export_detector.py.
 
 humbaba  (the humbaba authors)                            — Apache-2.0
     https://github.com/samhodge-tokgan/humbaba

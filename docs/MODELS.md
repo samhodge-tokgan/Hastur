@@ -75,7 +75,7 @@ Hastur ships **no model weights**. Meta's SAM-3D-Body checkpoints are gated on H
 
 | # | File (+ sidecar) | Tool & invocation | Approx size | Gated ckpt? |
 |---|---|---|---|---|
-| 1 | `person_detector.onnx` + `.json` | `export_detector.py --model ssdlite --out …` | ~14 MB | no (torchvision, BSD) |
+| 1 | `person_detector.onnx` + `.json` | `export_detector.py --model frcnn_r50_v2 --size 1280 --out …` | ~167 MB | no (torchvision, BSD) |
 | 2 | `mhr_assets.bin` + `.manifest.json` | `extract_mhr_assets.py --out … --manifest …` | ~35 MB | yes |
 | 3 | `pose_corrective.onnx` | `export_pose_corrective.py --out …` (`--fp16` optional) | ~670 MB fp32 / ~335 MB fp16 | yes |
 | 4 | `sam3dbody_body.onnx` | `export_sam3dbody.py --mode faithful --out …` | ~1.8 GB fp16 | yes — **hours** |
@@ -105,7 +105,7 @@ present, is verified.
 ## 4. Legal posture
 
 - **Hastur code:** Apache-2.0.
-- **MHR** (body model) and the **detector** (torchvision `ssdlite`, BSD-3-Clause): permissively licensed.
+- **MHR** (body model) and the **detector** (torchvision `fasterrcnn_resnet50_fpn_v2`, BSD-3-Clause): permissively licensed.
 - **SAM-3D-Body weights:** the **SAM License** (Meta). Commercial use is permitted, but redistribution passes the
   license through and its **no-reverse-engineering** clause applies; treat the local ONNX conversion as a derivative
   work of weights **you** are licensed for. The embedded **DINOv3** carries its own gated terms.

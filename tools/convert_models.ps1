@@ -135,8 +135,9 @@ function Run-Step {
 }
 
 # ─── ordered export pipeline ────────────────────────────────────────────────
-Run-Step "person_detector.onnx" "person detector (ssdlite)" `
-  @((Join-Path $ToolsDir "export_detector.py"), "--model", "ssdlite",
+Run-Step "person_detector.onnx" "person detector (frcnn_r50_v2 @ 1280)" `
+  @((Join-Path $ToolsDir "export_detector.py"), "--model", "frcnn_r50_v2",
+    "--size", "1280",
     "--out", (Join-Path $OutDir "person_detector.onnx"))
 
 Run-Step "mhr_assets.bin" "MHR static assets" `
