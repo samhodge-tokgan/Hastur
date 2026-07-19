@@ -1,0 +1,197 @@
+{
+  "version": 1,
+  "blocks": [
+    {
+      "name": "base_shape",
+      "dtype": "float32",
+      "shape": [
+        18439,
+        3
+      ],
+      "offset": 2096,
+      "nbytes": 221268
+    },
+    {
+      "name": "shape_vectors",
+      "dtype": "float32",
+      "shape": [
+        45,
+        18439,
+        3
+      ],
+      "offset": 223368,
+      "nbytes": 9957060
+    },
+    {
+      "name": "faces",
+      "dtype": "int32",
+      "shape": [
+        36874,
+        3
+      ],
+      "offset": 10180432,
+      "nbytes": 442488
+    },
+    {
+      "name": "parameter_transform",
+      "dtype": "float32",
+      "shape": [
+        889,
+        249
+      ],
+      "offset": 10622920,
+      "nbytes": 885444
+    },
+    {
+      "name": "joint_translation_offsets",
+      "dtype": "float32",
+      "shape": [
+        127,
+        3
+      ],
+      "offset": 11508368,
+      "nbytes": 1524
+    },
+    {
+      "name": "joint_prerotations",
+      "dtype": "float32",
+      "shape": [
+        127,
+        4
+      ],
+      "offset": 11509896,
+      "nbytes": 2032
+    },
+    {
+      "name": "joint_parents",
+      "dtype": "int32",
+      "shape": [
+        127
+      ],
+      "offset": 11511928,
+      "nbytes": 508
+    },
+    {
+      "name": "pmi",
+      "dtype": "int64",
+      "shape": [
+        2,
+        266
+      ],
+      "offset": 11512440,
+      "nbytes": 4256
+    },
+    {
+      "name": "pmi_buffer_sizes",
+      "dtype": "int32",
+      "shape": [
+        4
+      ],
+      "offset": 11516696,
+      "nbytes": 16
+    },
+    {
+      "name": "inverse_bind_pose",
+      "dtype": "float32",
+      "shape": [
+        127,
+        8
+      ],
+      "offset": 11516712,
+      "nbytes": 4064
+    },
+    {
+      "name": "skin_vert_indices",
+      "dtype": "int64",
+      "shape": [
+        51337
+      ],
+      "offset": 11520776,
+      "nbytes": 410696
+    },
+    {
+      "name": "skin_joint_indices",
+      "dtype": "int32",
+      "shape": [
+        51337
+      ],
+      "offset": 11931472,
+      "nbytes": 205348
+    },
+    {
+      "name": "skin_weights",
+      "dtype": "float32",
+      "shape": [
+        51337
+      ],
+      "offset": 12136824,
+      "nbytes": 205348
+    },
+    {
+      "name": "scale_mean",
+      "dtype": "float32",
+      "shape": [
+        68
+      ],
+      "offset": 12342176,
+      "nbytes": 272
+    },
+    {
+      "name": "scale_comps",
+      "dtype": "float32",
+      "shape": [
+        28,
+        68
+      ],
+      "offset": 12342448,
+      "nbytes": 7616
+    },
+    {
+      "name": "hand_pose_mean",
+      "dtype": "float32",
+      "shape": [
+        54
+      ],
+      "offset": 12350064,
+      "nbytes": 216
+    },
+    {
+      "name": "hand_pose_comps",
+      "dtype": "float32",
+      "shape": [
+        54,
+        54
+      ],
+      "offset": 12350280,
+      "nbytes": 11664
+    },
+    {
+      "name": "hand_joint_idxs_left",
+      "dtype": "int32",
+      "shape": [
+        27
+      ],
+      "offset": 12361944,
+      "nbytes": 108
+    },
+    {
+      "name": "hand_joint_idxs_right",
+      "dtype": "int32",
+      "shape": [
+        27
+      ],
+      "offset": 12362056,
+      "nbytes": 108
+    },
+    {
+      "name": "keypoint_mapping",
+      "dtype": "float32",
+      "shape": [
+        308,
+        18566
+      ],
+      "offset": 12362168,
+      "nbytes": 22873312
+    }
+  ]
+}

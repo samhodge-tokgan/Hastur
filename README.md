@@ -10,9 +10,11 @@ human-mesh-recovery pipeline through **ONNX Runtime** — the **CoreML** executi
 **CUDA** execution provider on Linux/Windows (NVIDIA), with automatic CPU fallback. It reconstructs posed 3D human
 mesh(es) from a single frame and renders them **in neutral grey with a coverage alpha, at the input-frame resolution**.
 
-> **Status: v0.1.0 released.** The full **multi-person + hands** pipeline runs and renders
+> **Status: v0.2.0.** The full **multi-person + hands** pipeline runs and renders
 > on **macOS (CoreML/CPU), Linux (CUDA) and Windows (CUDA)**, and is validated in-host in **Nuke 16 (macOS)** and
-> **Autodesk Flame 2027 (Linux/CUDA)**. This is the SAM-3D-Body counterpart to
+> **Autodesk Flame 2027 (Linux/CUDA)**. **0.2.0** upgrades the default person detector to **Faster R-CNN
+> R50-FPN v2 @ 1280** (stable, flicker-free detection that separates close figures) with tuned defaults
+> (detector threshold **0.85**, max people **3**). This is the SAM-3D-Body counterpart to
 > [humbaba](https://github.com/samhodge-tokgan/humbaba) (DepthAnything3) and reuses its cross-platform ORT/OFX scaffold.
 
 - **Input:** RGB(A) frame buffer (sRGB display-referred or ACEScg working space).
@@ -95,7 +97,7 @@ Use Policy and a clause (1.b.iv) restricting reverse-engineering — treat local
 a derivative work you own.
 
 Third-party components retain their own licenses, attributed in [`NOTICE`](NOTICE): the **humbaba** scaffold, **MHR**,
-and **Detectron2** (Apache-2.0), the **torchvision ssdlite** detector (BSD-3), **ONNX Runtime** (MIT), **Eigen**
+and **Detectron2** (Apache-2.0), the **torchvision Faster R-CNN** detector (BSD-3), **ONNX Runtime** (MIT), **Eigen**
 (MPL-2.0), the **OpenFX SDK** (BSD-3), and **stb** (public domain). **DINOv3** (embedded in the SAM-3D-Body checkpoint)
 has its own gated Meta license.
 

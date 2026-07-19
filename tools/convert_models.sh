@@ -189,9 +189,13 @@ run_step() {  # run_step <primary-out> <label> -- <cmd...>
 }
 
 # ─── the ordered export pipeline ────────────────────────────────────────────
-# 1. detector — clean torchvision ssdlite ONNX (no gated weights involved).
-run_step person_detector.onnx "person detector (ssdlite)" -- \
-  "$PYTHON" "$TOOLS/export_detector.py" --model ssdlite \
+# 1. detector — clean torchvision Faster R-CNN R50-FPN v2 ONNX at 1280 (no gated
+#    weights involved). Stable ~1.0 confidence on real people (no flicker) and
+#    separates close figures far better than the old ssdlite320. Set
+#    HASTUR_DETECTOR / HASTUR_DETECTOR_SIZE to override (see export_detector.py).
+run_step person_detector.onnx "person detector (frcnn_r50_v2 @ ${HASTUR_DETECTOR_SIZE:-1280})" -- \
+  "$PYTHON" "$TOOLS/export_detector.py" --model "${HASTUR_DETECTOR:-frcnn_r50_v2}" \
+    --size "${HASTUR_DETECTOR_SIZE:-1280}" \
     --out "$OUT_DIR/person_detector.onnx"
 
 # 2. MHR static assets — flat binary for the C++ FK+LBS.

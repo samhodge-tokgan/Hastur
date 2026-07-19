@@ -106,7 +106,7 @@ def build_model(name, score_thresh, nms_thresh):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="ssdlite", choices=list(MODELS.keys()))
+    ap.add_argument("--model", default="frcnn_r50_v2", choices=list(MODELS.keys()))
     ap.add_argument("--out", default="models/person_detector.onnx")
     ap.add_argument("--size", type=int, default=0, help="override fixed square input size")
     ap.add_argument("--score-thresh", type=float, default=0.05,

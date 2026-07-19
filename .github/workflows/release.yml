@@ -23,7 +23,7 @@ on:
     inputs:
       version:
         description: "Version string for the installers"
-        default: "0.1.0"
+        default: "0.2.0"
   push:
     tags: ["v*"]
 
@@ -162,7 +162,7 @@ jobs:
           VERSION: ${{ github.event.inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
-          V="${VERSION#v}"; [ -n "$V" ] || V="0.1.0"
+          V="${VERSION#v}"; [ -n "$V" ] || V="0.2.0"
           # A short model-less USAGE note, injected next to the plugin.
           cat > USAGE-MODELS.txt <<'EOF'
           Sam3dBody OFX plugin (Hastur) — MODEL-LESS installer
@@ -206,7 +206,7 @@ jobs:
           VERSION: ${{ github.event.inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
-          V="${VERSION#v}"; [ -n "$V" ] || V="0.1.0"
+          V="${VERSION#v}"; [ -n "$V" ] || V="0.2.0"
           C=build/Sam3dBody.ofx.bundle/Contents
           cp tools/convert_models.sh  "$C/convert_models.sh";  chmod +x "$C/convert_models.sh"
           cp tools/convert_models.ps1 "$C/convert_models.ps1"
@@ -230,7 +230,7 @@ jobs:
           VERSION: ${{ github.event.inputs.version || github.ref_name }}
         run: |
           $v = "${env:VERSION}" -replace '^v',''
-          if (-not $v) { $v = "0.1.0" }
+          if (-not $v) { $v = "0.2.0" }
           $c = "build/Sam3dBody.ofx.bundle/Contents"
           Copy-Item tools/convert_models.ps1 "$c/convert_models.ps1"
           Copy-Item tools/convert_models.sh  "$c/convert_models.sh"
