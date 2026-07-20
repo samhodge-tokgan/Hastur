@@ -10,9 +10,12 @@ human-mesh-recovery pipeline through **ONNX Runtime** — the **CoreML** executi
 **CUDA** execution provider on Linux/Windows (NVIDIA), with automatic CPU fallback. It reconstructs posed 3D human
 mesh(es) from a single frame and renders them **in neutral grey with a coverage alpha, at the input-frame resolution**.
 
-> **Status: v0.3.0.** The full **multi-person + hands** pipeline runs and renders
+> **Status: v0.4.0.** The full **multi-person + hands** pipeline runs and renders
 > on **macOS (CoreML/CPU), Linux (CUDA) and Windows (CUDA)**, and is validated in-host in **Nuke 16 (macOS)**,
-> **Natron 2.6 (macOS)** and **Autodesk Flame 2027 (Linux/CUDA)**. **0.3.0** adds an **AOV / render-pass** stack —
+> **Natron 2.6 (macOS)** and **Autodesk Flame 2027 (Linux/CUDA)**. **0.4.0** clothes the mesh by default in a modest
+> **leotard** (torso + upper arms + upper legs) over grey skin — both the **leotard and skin colours are
+> user-choosable** (default saturated blue + neutral grey), with a **Garment** toggle back to the plain neutral clay.
+> **0.3.0** added an **AOV / render-pass** stack —
 > **Depth, Position, Normal, Pref (reference position), ST (texture UV)** and **Cryptomatte** per-person mattes, plus
 > **world↔NDC camera matrices** — delivered as true **multi-plane layers on one node in Natron** and via a portable
 > **Output AOV** selector (one pass per node) in every host, incl. Nuke/Flame. See **[docs/AOVS.md](docs/AOVS.md)**.
@@ -21,10 +24,11 @@ mesh(es) from a single frame and renders them **in neutral grey with a coverage 
 > [humbaba](https://github.com/samhodge-tokgan/humbaba) (DepthAnything3) and reuses its cross-platform ORT/OFX scaffold.
 
 - **Input:** RGB(A) frame buffer (sRGB display-referred or ACEScg working space).
-- **Output:** an **RGBA** render — neutral-grey shaded humanoid mesh(es) over a transparent (coverage-alpha)
-  background, at the input resolution (the C++/ORT equivalent of the reference
-  `Renderer.__call__(..., return_rgba=True)`) — plus the optional **AOV stack** (Depth / Position / Normal /
-  Pref / ST / Cryptomatte + camera matrices). See **[docs/AOVS.md](docs/AOVS.md)**.
+- **Output:** an **RGBA** render — a shaded humanoid mesh (by default a grey figure in a modest blue **leotard**;
+  colours are choosable and a toggle restores the plain neutral clay) over a transparent (coverage-alpha) background,
+  at the input resolution (the C++/ORT equivalent of the reference `Renderer.__call__(..., return_rgba=True)`) — plus
+  the optional **AOV stack** (Depth / Position / Normal / Pref / ST / Cryptomatte + camera matrices). See
+  **[docs/AOVS.md](docs/AOVS.md)**.
 - **Acceleration:** ONNX Runtime — CoreML EP (macOS), CUDA EP (Linux/Windows), CPU fallback everywhere.
 
 ## Validation

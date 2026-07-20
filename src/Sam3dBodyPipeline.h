@@ -42,8 +42,16 @@ struct PipelineParams {
   float detector_score_thresh = 0.5f;  // person score gate
   int max_people = 1;                  // cap the per-person loop (M4: 1)
 
-  float grey = 0.6f;                   // neutral clay albedo (linear)
+  float grey = 0.6f;                   // neutral clay albedo (linear, garment off)
   int ssaa = 2;                        // rasterizer supersampling per axis
+
+  // Garment (leotard). When on, the mesh renders clothed: a modest leotard over
+  // the torso/upper limbs in leotard_rgb, skin elsewhere in skin_rgb (both
+  // linear). Off -> classic plain neutral clay (`grey`). Defaults address the
+  // "bare nude mesh" concern out of the box (grey body + saturated-blue leotard).
+  bool garment = true;
+  float leotard_rgb[3] = {0.08f, 0.15f, 0.6f};  // fairly saturated blue
+  float skin_rgb[3] = {0.6f, 0.6f, 0.6f};       // neutral grey
 
   bool override_camera = false;        // use focal_override / fov_override_deg
   float focal_override = 0.f;          // fx=fy in px (>0 wins)

@@ -57,7 +57,7 @@
   "Body via ONNX Runtime with hardware acceleration."
 #define kPluginIdentifier "com.tokgan.Sam3dBody"
 #define kPluginVersionMajor 0
-#define kPluginVersionMinor 3
+#define kPluginVersionMinor 4
 
 // Param names.
 #define kParamModelDir "modelDir"
@@ -65,6 +65,9 @@
 #define kParamScoreThresh "scoreThresh"
 #define kParamMaxPeople "maxPeople"
 #define kParamGrey "greyLevel"
+#define kParamGarment "garment"
+#define kParamLeotardColor "leotardColor"
+#define kParamSkinColor "skinColor"
 #define kParamOverrideCam "overrideCamera"
 #define kParamFocal "focalPx"
 #define kParamFov "fovDeg"
@@ -313,6 +316,9 @@ class Sam3dBodyPlugin : public OFX::ImageEffect {
   OFX::DoubleParam* _scoreThresh = nullptr;
   OFX::IntParam* _maxPeople = nullptr;
   OFX::DoubleParam* _grey = nullptr;
+  OFX::BooleanParam* _garment = nullptr;
+  OFX::RGBParam* _leotardColor = nullptr;
+  OFX::RGBParam* _skinColor = nullptr;
   OFX::BooleanParam* _overrideCam = nullptr;
   OFX::DoubleParam* _focal = nullptr;
   OFX::DoubleParam* _fov = nullptr;
@@ -342,6 +348,9 @@ class Sam3dBodyPlugin : public OFX::ImageEffect {
     _scoreThresh = fetchDoubleParam(kParamScoreThresh);
     _maxPeople = fetchIntParam(kParamMaxPeople);
     _grey = fetchDoubleParam(kParamGrey);
+    _garment = fetchBooleanParam(kParamGarment);
+    _leotardColor = fetchRGBParam(kParamLeotardColor);
+    _skinColor = fetchRGBParam(kParamSkinColor);
     _overrideCam = fetchBooleanParam(kParamOverrideCam);
     _focal = fetchDoubleParam(kParamFocal);
     _fov = fetchDoubleParam(kParamFov);
@@ -538,6 +547,15 @@ bool Sam3dBodyPlugin::renderPipeline(const OFX::RenderArguments& args) {
   bool premult = false; _premult->getValue(premult);
   bool compOverSrc = false; _compOverSrc->getValue(compOverSrc);
   p.premultiply = false;  // pipeline emits straight; premult applied at write
+  bool garment = true; _garment->getValue(garment); p.garment = garment;
+  double lr = 0, lg = 0, lb = 0; _leotardColor->getValue(lr, lg, lb);
+  p.leotard_rgb[0] = static_cast<float>(lr);
+  p.leotard_rgb[1] = static_cast<float>(lg);
+  p.leotard_rgb[2] = static_cast<float>(lb);
+  double kr = 0, kg = 0, kb = 0; _skinColor->getValue(kr, kg, kb);
+  p.skin_rgb[0] = static_cast<float>(kr);
+  p.skin_rgb[1] = static_cast<float>(kg);
+  p.skin_rgb[2] = static_cast<float>(kb);
   int aov = kAovBeauty; _outputAov->getValue(aov);
   // Multi-plane hosts stash the planes they want in g_renderPlanes (via the
   // intercepted GetClipComponents/render actions). If any non-colour plane is
@@ -555,13 +573,16 @@ bool Sam3dBodyPlugin::renderPipeline(const OFX::RenderArguments& args) {
   // makes the Nuke AOV gizmo (8 instances, one per plane, same input) run
   // inference ONCE, and lets a single node switch outputAov for free. The
   // per-key lock guarantees compute-once even under concurrent host rendering.
-  char sig[256];
+  char sig[320];
   std::snprintf(sig, sizeof(sig),
-                "%d|%.4f|%d|%.4f|%d|%.4f|%.4f|%d|%d|%dx%d|%016llx",
+                "%d|%.4f|%d|%.4f|%d|%.4f|%.4f|%d|%d|%dx%d|%016llx"
+                "|%d|%.3f,%.3f,%.3f|%.3f,%.3f,%.3f",
                 cu, p.detector_score_thresh, p.max_people, p.grey,
                 static_cast<int>(p.override_camera), p.focal_override,
                 p.fov_override_deg, p.ssaa, static_cast<int>(p.emit_aovs), W, H,
-                static_cast<unsigned long long>(HashRgb(rgb)));
+                static_cast<unsigned long long>(HashRgb(rgb)),
+                static_cast<int>(p.garment), p.leotard_rgb[0], p.leotard_rgb[1],
+                p.leotard_rgb[2], p.skin_rgb[0], p.skin_rgb[1], p.skin_rgb[2]);
   const std::string fkey = key + "|" + sig;
 
   std::shared_ptr<hastur::FrameResult> frp = FrameCacheGet(fkey);
@@ -955,10 +976,37 @@ void Sam3dBodyFactory::describeInContext(OFX::ImageEffectDescriptor& desc,
   {
     DoubleParamDescriptor* p = desc.defineDoubleParam(kParamGrey);
     p->setLabels("Grey level", "Grey", "Neutral grey level");
-    p->setHint("Linear neutral-grey clay albedo for the rendered mesh.");
+    p->setHint("Linear neutral-grey albedo used for the plain-clay look when the "
+               "Garment toggle is OFF.");
     p->setRange(0.0, 1.0);
     p->setDisplayRange(0.0, 1.0);
     p->setDefault(0.6);
+    page->addChild(*p);
+  }
+  // --- Garment (leotard) ---------------------------------------------------
+  {
+    BooleanParamDescriptor* p = desc.defineBooleanParam(kParamGarment);
+    p->setLabels("Garment", "Garment", "Garment (leotard)");
+    p->setHint("Render the figure clothed in a modest leotard (torso + upper "
+               "arms + upper legs) instead of a bare mesh. On by default. Turn "
+               "OFF for the plain neutral-grey clay (matte / relight base).");
+    p->setDefault(true);
+    page->addChild(*p);
+  }
+  {
+    RGBParamDescriptor* p = desc.defineRGBParam(kParamLeotardColor);
+    p->setLabels("Leotard colour", "Leotard", "Leotard garment colour");
+    p->setHint("Linear RGB albedo of the leotard (torso / upper limbs). Default "
+               "a fairly saturated blue for clear contrast against skin.");
+    p->setDefault(0.08, 0.15, 0.6);  // fairly saturated blue
+    page->addChild(*p);
+  }
+  {
+    RGBParamDescriptor* p = desc.defineRGBParam(kParamSkinColor);
+    p->setLabels("Skin colour", "Skin", "Skin / body colour");
+    p->setHint("Linear RGB albedo of the uncovered skin (head, forearms, hands, "
+               "lower legs, feet). Default neutral grey.");
+    p->setDefault(0.6, 0.6, 0.6);  // neutral grey
     page->addChild(*p);
   }
   {

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Hastur VERSION 0.3.0 LANGUAGES CXX)
+project(Hastur VERSION 0.4.0 LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
 # Options
@@ -130,6 +130,14 @@ set_target_properties(hastur_mhr PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_executable(mhr_validate tests/mhr_validate.cpp)
 target_link_libraries(mhr_validate PRIVATE hastur_mhr)
 
+# Fast, inference-free garment-mask preview: renders the leotard on the canonical
+# rest pose in <1s (no ONNX). Tuning / regression tool for the mask coverage.
+#   leotard_preview <mhr_assets.bin|dir> <out.png>
+add_executable(leotard_preview
+  tools/leotard_preview.cpp src/SoftwareRasterizer.cpp src/LeotardMask.cpp)
+target_link_libraries(leotard_preview PRIVATE hastur_mhr)
+target_include_directories(leotard_preview PRIVATE src tools)
+
 # AOV support unit checks (Cryptomatte hash/ranking + camera m44f round-trip).
 # No models / ONNX / OFX needed: aov_validate takes no arguments.
 add_executable(aov_validate
@@ -237,6 +245,7 @@ if(HASTUR_WITH_ONNX)
     src/CameraSolver.cpp
     src/CameraMatrix.cpp
     src/Cryptomatte.cpp
+    src/LeotardMask.cpp
     src/OrtSessionManager.cpp
     src/SoftwareRasterizer.cpp
     src/Sam3dBodyPipeline.cpp
@@ -418,6 +427,7 @@ if(HASTUR_WITH_ONNX)
     src/CameraSolver.cpp
     src/CameraMatrix.cpp
     src/Cryptomatte.cpp
+    src/LeotardMask.cpp
     src/OrtSessionManager.cpp
     src/SoftwareRasterizer.cpp
     src/Sam3dBodyPipeline.cpp
