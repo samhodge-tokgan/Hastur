@@ -97,6 +97,8 @@ RgbaImage Render(const Mesh& mesh, const Camera& cam, int W, int H,
   const bool want_aov = (aov != nullptr);
   const bool want_pref = want_aov && attrib && attrib->pref;
   const bool want_st = want_aov && attrib && attrib->uv;
+  // Garment mask drives the BEAUTY albedo, so it is NOT gated on AOV emission.
+  const bool want_leo = attrib && attrib->leotardness;
   if (want_aov) {
     aov->width = W;
     aov->height = H;
@@ -233,14 +235,26 @@ RgbaImage Render(const Mesh& mesh, const Camera& cam, int W, int H,
         }
         Vec3 view_to_cam = normalize(Vec3{-pcam.x, -pcam.y, -pcam.z});
 
-        float shade = ShadeScalar(n, view_to_cam, opt);
-        float g = opt.grey * shade;
-        g = std::min(1.0f, std::max(0.0f, g));
+        const float shade = ShadeScalar(n, view_to_cam, opt);
+
+        // Albedo: plain neutral clay by default; when the garment is on, blend
+        // skin<->leotard by the perspective-correct per-vertex mask so the mesh
+        // renders as a clothed figure. Lit per channel by the same `shade`.
+        float albedo[3] = {opt.grey, opt.grey, opt.grey};
+        if (opt.garment && want_leo) {
+          float leo = (w0 * attrib->leotardness[i0] * ia +
+                       w1 * attrib->leotardness[i1] * ib +
+                       w2 * attrib->leotardness[i2] * ic) * z;
+          leo = std::min(1.0f, std::max(0.0f, leo));
+          for (int k = 0; k < 3; ++k)
+            albedo[k] =
+                opt.skin_rgb[k] + leo * (opt.leotard_rgb[k] - opt.skin_rgb[k]);
+        }
 
         fb_invz[idx] = invz;
-        fb_r[idx] = g;
-        fb_g[idx] = g;
-        fb_b[idx] = g;
+        fb_r[idx] = std::min(1.0f, std::max(0.0f, albedo[0] * shade));
+        fb_g[idx] = std::min(1.0f, std::max(0.0f, albedo[1] * shade));
+        fb_b[idx] = std::min(1.0f, std::max(0.0f, albedo[2] * shade));
         fb_cov[idx] = 1;
 
         if (want_aov) {

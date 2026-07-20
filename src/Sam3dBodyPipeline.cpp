@@ -21,6 +21,7 @@
 #include "CropAffine.h"
 #include "Cryptomatte.h"
 #include "DetectorEngine.h"
+#include "LeotardMask.h"
 #include "HandRefinerEngine.h"
 #include "MeshAssets.h"
 #include "MhrModel.h"
@@ -153,6 +154,10 @@ struct Sam3dBodyPipeline::Impl {
   std::shared_ptr<MeshAssets> assets;
   std::unique_ptr<MhrModel> mhr;
 
+  // Static per-vertex garment mask (kNumVerts, 1 = leotard, 0 = skin), computed
+  // once at load from the rest-pose landmarks. Empty -> garment disabled.
+  std::vector<float> leotard_mask;
+
   // M7 hand refiner: located at load, created lazily on the first gated hand.
   std::string hand_path;                        // empty -> refinement disabled
   std::unique_ptr<HandRefinerEngine> hand;      // lazy
@@ -255,6 +260,17 @@ bool Sam3dBodyPipeline::EnsureLoaded(const PipelineParams& p) {
         std::fclose(f);
       }
     }
+  }
+
+  // Static garment (leotard) mask from the rest-pose landmarks — one identity
+  // mesh eval, done once. Non-fatal: on any failure the garment simply stays
+  // disabled (the mesh renders as plain neutral clay).
+  try {
+    std::array<float, kParamDim> zero_pred{};
+    const Mesh rest = s.mhr->Run(zero_pred, /*pose_corrective=*/nullptr);
+    s.leotard_mask = ComputeLeotardMask(rest);
+  } catch (...) {
+    s.leotard_mask.clear();
   }
 
   s.ok = true;
@@ -509,6 +525,11 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
   ropt.grey = p.grey;
   ropt.ssaa = std::max(1, p.ssaa);
   ropt.premultiply = true;  // composite in premultiplied space internally
+  ropt.garment = p.garment && !s.leotard_mask.empty();
+  for (int k = 0; k < 3; ++k) {
+    ropt.leotard_rgb[k] = p.leotard_rgb[k];
+    ropt.skin_rgb[k] = p.skin_rgb[k];
+  }
 
   // --- Per-person loop ----------------------------------------------------
   for (int i = 0; i < n_people; ++i) {
@@ -587,6 +608,9 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
   // across people (topology/vertex order are identical for every person).
   std::vector<float> pref;
   VertAttrib attrib;
+  // Garment mask (static per-vertex, computed once at load) — drives the beauty
+  // albedo, so it is always supplied (not gated on AOV emission).
+  if (ropt.garment) attrib.leotardness = s.leotard_mask.data();
   const bool st_available = p.emit_aovs && s.assets && s.assets->has("uv");
   if (p.emit_aovs && s.assets) {
     const float* base = s.assets->f32("base_shape");  // (kNumVerts,3), cm, pre-flip
@@ -600,6 +624,8 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
     attrib.uv = st_available ? s.assets->f32("uv") : nullptr;
   }
   std::vector<RasterAov> person_aov(p.emit_aovs ? result.people.size() : 0);
+  // Pass the attribute whenever AOVs are requested OR the garment needs its mask.
+  const bool pass_attrib = p.emit_aovs || attrib.leotardness != nullptr;
 
   auto tr = Clock::now();
   std::vector<float>& acc = result.render.data;  // premultiplied accumulator
@@ -608,7 +634,7 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
     if (person.mesh.verts.empty()) continue;
     RasterAov* aptr = p.emit_aovs ? &person_aov[idx] : nullptr;
     RgbaImage r = Render(person.mesh, person.cam, W, H, ropt, aptr,
-                         p.emit_aovs ? &attrib : nullptr);
+                         pass_attrib ? &attrib : nullptr);
     if (static_cast<int>(r.data.size()) != W * H * 4) continue;
     OverComposite(acc, r.data);  // r is premultiplied (ropt.premultiply=true)
   }

@@ -58,6 +58,15 @@ struct RasterOptions {
 
   // Near clip in metres; triangles with any vertex at depth <= near are dropped.
   float near_z = 1e-3f;
+
+  // Garment (leotard). When true AND a per-vertex `leotardness` attribute is
+  // supplied (see VertAttrib), the albedo is mix(skin_rgb, leotard_rgb, leo) so
+  // the mesh renders as a clothed figure — a modest leotard over the torso/upper
+  // limbs, skin elsewhere. When false the mesh is the classic plain neutral clay
+  // (`grey` above). All colours are linear.
+  bool garment = false;
+  float leotard_rgb[3] = {0.08f, 0.15f, 0.6f};  // fairly saturated blue
+  float skin_rgb[3] = {0.6f, 0.6f, 0.6f};       // neutral grey
 };
 
 // Point-sampled per-fragment data AOVs for one Render() call, at output (W x H)
@@ -81,6 +90,10 @@ struct RasterAov {
 struct VertAttrib {
   const float* pref = nullptr;  // kNumVerts*3 canonical reference position
   const float* uv = nullptr;    // kNumVerts*2 texture coordinates
+  // Per-vertex garment mask in [0,1] (1 = leotard, 0 = skin). Drives the beauty
+  // albedo when RasterOptions::garment is set; unlike pref/uv it is NOT gated on
+  // AOV emission (the beauty render needs it).
+  const float* leotardness = nullptr;  // kNumVerts
 };
 
 // Renders `mesh` (verts + faces) under `cam` into a W x H RGBA image. Returns an
