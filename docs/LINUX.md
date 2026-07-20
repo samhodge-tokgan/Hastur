@@ -96,18 +96,23 @@ Any OFX host works; we test with the portable Linux Natron
 (`Natron-2.5.0-Linux-x86_64-no-installer`). `NatronRenderer` runs without a display.
 
 ```bash
-export OFX_PLUGIN_PATH="$HOME/OFX/Plugins"
+export OFX_PLUGIN_PATH="$HOME/OFX/Plugins"        # dir holding Sam3dBody.ofx.bundle
 export LD_LIBRARY_PATH="/usr/local/cuda-12.6/lib64:/usr/lib64:$LD_LIBRARY_PATH"
-export HASTUR_INPUT=test-assets/synthetic_test.png
-export HASTUR_OUTPUT=/tmp/depth.exr
-export HASTUR_MODEL_DIR="$HOME/hastur-models/sam3dbody_body.onnx"  # or bundle it in Resources/
-export HASTUR_ACESCG=0 HASTUR_PROCRES=504
-NatronRenderer --clear-openfx-cache -t tests/natron/render_depth.py < /dev/null
+export HASTUR_INPUT=build/smoke_input.png          # a person plate
+export HASTUR_OUTPUT=/tmp/hastur.exr
+export HASTUR_MODEL_DIR="$HOME/hastur-models"      # dir with the 4 model/asset files
+export HASTUR_RENDER=1                              # also render the beauty pass
+NatronRenderer --clear-openfx-cache -t tests/natron/smoke_aovs.py < /dev/null
 ```
 
-Expect `RESULT: PASS`, an EXR the **same size as the input**, and metric depth values
-(decimeters). Watch the GPU with `nvidia-smi` during the run — the CUDA session uses
-~2.4 GB VRAM for HASTUR at 504×504.
+`tests/natron/smoke_aovs.py` verifies the plugin loads, declares all seven AOV
+planes via the multi-plane extension (`PASS: all AOV planes declared`), and — with
+`HASTUR_RENDER=1` — renders the beauty pass end-to-end. Use an **arch-matched**
+Natron (arm64 plugin needs an arm64 Natron). By default the output is the beauty
+pass (neutral-grey mesh RGB + coverage alpha); set the
+**Output AOV** param to emit a data pass (Depth / Position / Normal / Pref / ST /
+CryptoObject00-01) instead — see `docs/AOVS.md`. Watch the GPU with `nvidia-smi`
+during the run — the CUDA session uses ~2.4 GB VRAM for HASTUR at 504×504.
 
 ### Quick GPU smoke test (no host)
 

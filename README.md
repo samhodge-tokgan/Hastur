@@ -10,17 +10,21 @@ human-mesh-recovery pipeline through **ONNX Runtime** — the **CoreML** executi
 **CUDA** execution provider on Linux/Windows (NVIDIA), with automatic CPU fallback. It reconstructs posed 3D human
 mesh(es) from a single frame and renders them **in neutral grey with a coverage alpha, at the input-frame resolution**.
 
-> **Status: v0.2.0.** The full **multi-person + hands** pipeline runs and renders
-> on **macOS (CoreML/CPU), Linux (CUDA) and Windows (CUDA)**, and is validated in-host in **Nuke 16 (macOS)** and
-> **Autodesk Flame 2027 (Linux/CUDA)**. **0.2.0** upgrades the default person detector to **Faster R-CNN
-> R50-FPN v2 @ 1280** (stable, flicker-free detection that separates close figures) with tuned defaults
-> (detector threshold **0.85**, max people **3**). This is the SAM-3D-Body counterpart to
+> **Status: v0.3.0.** The full **multi-person + hands** pipeline runs and renders
+> on **macOS (CoreML/CPU), Linux (CUDA) and Windows (CUDA)**, and is validated in-host in **Nuke 16 (macOS)**,
+> **Natron 2.6 (macOS)** and **Autodesk Flame 2027 (Linux/CUDA)**. **0.3.0** adds an **AOV / render-pass** stack —
+> **Depth, Position, Normal, Pref (reference position), ST (texture UV)** and **Cryptomatte** per-person mattes, plus
+> **world↔NDC camera matrices** — delivered as true **multi-plane layers on one node in Natron** and via a portable
+> **Output AOV** selector (one pass per node) in every host, incl. Nuke/Flame. See **[docs/AOVS.md](docs/AOVS.md)**.
+> **0.2.0** had upgraded the default person detector to **Faster R-CNN R50-FPN v2 @ 1280** (detector threshold **0.85**,
+> max people **3**). This is the SAM-3D-Body counterpart to
 > [humbaba](https://github.com/samhodge-tokgan/humbaba) (DepthAnything3) and reuses its cross-platform ORT/OFX scaffold.
 
 - **Input:** RGB(A) frame buffer (sRGB display-referred or ACEScg working space).
 - **Output:** an **RGBA** render — neutral-grey shaded humanoid mesh(es) over a transparent (coverage-alpha)
-  background, at the input resolution. This is the C++/ORT equivalent of the reference
-  `Renderer.__call__(..., return_rgba=True)`.
+  background, at the input resolution (the C++/ORT equivalent of the reference
+  `Renderer.__call__(..., return_rgba=True)`) — plus the optional **AOV stack** (Depth / Position / Normal /
+  Pref / ST / Cryptomatte + camera matrices). See **[docs/AOVS.md](docs/AOVS.md)**.
 - **Acceleration:** ONNX Runtime — CoreML EP (macOS), CUDA EP (Linux/Windows), CPU fallback everywhere.
 
 ## Validation

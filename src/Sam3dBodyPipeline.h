@@ -51,6 +51,14 @@ struct PipelineParams {
 
   bool premultiply = false;            // emit premultiplied (associated) alpha
 
+  // AOV emission (depth/position/normal/pref/st + Cryptomatte + camera matrices).
+  // Off by default: the OFX layer turns it on only when a non-beauty plane is
+  // requested, since it adds per-person data buffers + a second resolve pass.
+  bool emit_aovs = false;
+  int crypto_levels = 2;               // Cryptomatte rank layers (2 ranks each)
+  float near_z = 0.1f;                 // camera-matrix NDC near (m)
+  float far_z = 100.f;                 // camera-matrix NDC far (m)
+
   float hand_tau = 0.5f;               // hand-presence gate (M7 hook only)
   int intra_threads = 0;               // ORT intra-op threads (0 = default)
 };

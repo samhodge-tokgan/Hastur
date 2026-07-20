@@ -88,11 +88,27 @@ inline float ShadeScalar(const Vec3& n, const Vec3& view_to_cam,
 }  // namespace
 
 RgbaImage Render(const Mesh& mesh, const Camera& cam, int W, int H,
-                 const RasterOptions& opt) {
+                 const RasterOptions& opt, RasterAov* aov,
+                 const VertAttrib* attrib) {
   RgbaImage out;
   out.width = W;
   out.height = H;
   out.data.assign(static_cast<size_t>(W) * H * 4, 0.0f);
+  const bool want_aov = (aov != nullptr);
+  const bool want_pref = want_aov && attrib && attrib->pref;
+  const bool want_st = want_aov && attrib && attrib->uv;
+  if (want_aov) {
+    aov->width = W;
+    aov->height = H;
+    aov->has_st = want_st;
+    const size_t n1 = static_cast<size_t>(W) * H;
+    aov->depth.assign(n1, 0.0f);
+    aov->position.assign(n1 * 3, 0.0f);
+    aov->normal.assign(n1 * 3, 0.0f);
+    aov->coverage.assign(n1, 0.0f);
+    aov->pref.assign(want_pref ? n1 * 3 : 0, 0.0f);
+    aov->st.assign(want_st ? n1 * 2 : 0, 0.0f);
+  }
   if (W <= 0 || H <= 0 || !mesh.faces || mesh.verts.empty()) return out;
 
   const int ss = std::max(1, opt.ssaa);
@@ -140,6 +156,17 @@ RgbaImage Render(const Mesh& mesh, const Camera& cam, int W, int H,
   std::vector<float> fb_r(npix, 0.0f), fb_g(npix, 0.0f), fb_b(npix, 0.0f);
   std::vector<uint8_t> fb_cov(npix, 0);
   std::vector<float> fb_invz(npix, -std::numeric_limits<float>::infinity());
+
+  // Supersampled data-AOV buffers (only when requested). Written for the winning
+  // (nearest) subsample; resolved by NEAREST at downsample time, never averaged.
+  std::vector<float> fb_z, fb_pos, fb_nrm, fb_pref, fb_st;
+  if (want_aov) {
+    fb_z.assign(npix, 0.0f);
+    fb_pos.assign(npix * 3, 0.0f);
+    fb_nrm.assign(npix * 3, 0.0f);
+    if (want_pref) fb_pref.assign(npix * 3, 0.0f);
+    if (want_st) fb_st.assign(npix * 2, 0.0f);
+  }
 
   const float inv_fx = 1.0f / fx;
   const float inv_fy = 1.0f / fy;
@@ -215,6 +242,32 @@ RgbaImage Render(const Mesh& mesh, const Camera& cam, int W, int H,
         fb_g[idx] = g;
         fb_b[idx] = g;
         fb_cov[idx] = 1;
+
+        if (want_aov) {
+          fb_z[idx] = z;
+          fb_pos[idx * 3 + 0] = pcam.x;
+          fb_pos[idx * 3 + 1] = pcam.y;
+          fb_pos[idx * 3 + 2] = pcam.z;
+          fb_nrm[idx * 3 + 0] = n.x;
+          fb_nrm[idx * 3 + 1] = n.y;
+          fb_nrm[idx * 3 + 2] = n.z;
+          if (want_pref) {
+            const float* pa = attrib->pref + 3 * i0;
+            const float* pb = attrib->pref + 3 * i1;
+            const float* pc = attrib->pref + 3 * i2;
+            for (int k = 0; k < 3; ++k)
+              fb_pref[idx * 3 + k] =
+                  (w0 * pa[k] * ia + w1 * pb[k] * ib + w2 * pc[k] * ic) * z;
+          }
+          if (want_st) {
+            const float* ua = attrib->uv + 2 * i0;
+            const float* ub = attrib->uv + 2 * i1;
+            const float* uc = attrib->uv + 2 * i2;
+            for (int k = 0; k < 2; ++k)
+              fb_st[idx * 2 + k] =
+                  (w0 * ua[k] * ia + w1 * ub[k] * ib + w2 * uc[k] * ic) * z;
+          }
+        }
       }
     }
   }
@@ -225,6 +278,9 @@ RgbaImage Render(const Mesh& mesh, const Camera& cam, int W, int H,
     for (int x = 0; x < W; ++x) {
       float sr = 0.0f, sg = 0.0f, sb = 0.0f;
       int cov = 0;
+      // Nearest covered subsample (max 1/z) -> the point sample for data AOVs.
+      size_t best_si = 0;
+      float best_invz = -std::numeric_limits<float>::infinity();
       for (int sy = 0; sy < ss; ++sy) {
         for (int sx = 0; sx < ss; ++sx) {
           const size_t si =
@@ -234,10 +290,31 @@ RgbaImage Render(const Mesh& mesh, const Camera& cam, int W, int H,
             sg += fb_g[si];
             sb += fb_b[si];
             ++cov;
+            if (want_aov && fb_invz[si] > best_invz) {
+              best_invz = fb_invz[si];
+              best_si = si;
+            }
           }
         }
       }
       const float alpha = cov * inv_samples;
+      if (want_aov) {
+        const size_t d1 = static_cast<size_t>(y) * W + x;
+        aov->coverage[d1] = alpha;
+        if (cov > 0) {
+          aov->depth[d1] = fb_z[best_si];
+          for (int k = 0; k < 3; ++k) {
+            aov->position[d1 * 3 + k] = fb_pos[best_si * 3 + k];
+            aov->normal[d1 * 3 + k] = fb_nrm[best_si * 3 + k];
+          }
+          if (want_pref)
+            for (int k = 0; k < 3; ++k)
+              aov->pref[d1 * 3 + k] = fb_pref[best_si * 3 + k];
+          if (want_st)
+            for (int k = 0; k < 2; ++k)
+              aov->st[d1 * 2 + k] = fb_st[best_si * 2 + k];
+        }
+      }
       float r, g, b;
       if (opt.premultiply) {
         // Premultiplied: colour already weighted by coverage.

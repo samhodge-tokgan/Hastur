@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Hastur VERSION 0.2.0 LANGUAGES CXX)
+project(Hastur VERSION 0.3.0 LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
 # Options
@@ -130,6 +130,12 @@ set_target_properties(hastur_mhr PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_executable(mhr_validate tests/mhr_validate.cpp)
 target_link_libraries(mhr_validate PRIVATE hastur_mhr)
 
+# AOV support unit checks (Cryptomatte hash/ranking + camera m44f round-trip).
+# No models / ONNX / OFX needed: aov_validate takes no arguments.
+add_executable(aov_validate
+  tests/aov_validate.cpp src/Cryptomatte.cpp src/CameraMatrix.cpp)
+target_include_directories(aov_validate PRIVATE src)
+
 # ---------------------------------------------------------------------------
 # OpenFX C++ Support library
 # ---------------------------------------------------------------------------
@@ -229,6 +235,8 @@ if(HASTUR_WITH_ONNX)
     src/MeshAssets.cpp
     src/CropAffine.cpp
     src/CameraSolver.cpp
+    src/CameraMatrix.cpp
+    src/Cryptomatte.cpp
     src/OrtSessionManager.cpp
     src/SoftwareRasterizer.cpp
     src/Sam3dBodyPipeline.cpp
@@ -408,6 +416,8 @@ if(HASTUR_WITH_ONNX)
     src/MeshAssets.cpp
     src/CropAffine.cpp
     src/CameraSolver.cpp
+    src/CameraMatrix.cpp
+    src/Cryptomatte.cpp
     src/OrtSessionManager.cpp
     src/SoftwareRasterizer.cpp
     src/Sam3dBodyPipeline.cpp
