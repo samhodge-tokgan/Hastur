@@ -60,10 +60,39 @@ struct RasterOptions {
   float near_z = 1e-3f;
 };
 
+// Point-sampled per-fragment data AOVs for one Render() call, at output (W x H)
+// resolution, row-major HWC, top-down. Each value comes from the NEAREST covered
+// subsample (no box-averaging -- averaging depth/normal/position across a
+// silhouette edge would invent surfaces that don't exist). Uncovered pixels are
+// 0; `coverage` is the anti-aliased alpha (matches the beauty render's alpha).
+struct RasterAov {
+  int width{}, height{};
+  bool has_st{false};
+  std::vector<float> depth;     // W*H     camera-space z (metres, >0 in front)
+  std::vector<float> position;  // W*H*3   camera-space surface position (m)
+  std::vector<float> normal;    // W*H*3   camera-space unit normal (toward cam)
+  std::vector<float> pref;      // W*H*3   canonical reference position
+  std::vector<float> st;        // W*H*2   texture (u,v)
+  std::vector<float> coverage;  // W*H     anti-aliased coverage (== alpha)
+};
+
+// Optional per-vertex data-AOV attributes, each kNumVerts long in mesh.verts
+// order. Null members are emitted as zeros (and, for uv, RasterAov::has_st=false).
+struct VertAttrib {
+  const float* pref = nullptr;  // kNumVerts*3 canonical reference position
+  const float* uv = nullptr;    // kNumVerts*2 texture coordinates
+};
+
 // Renders `mesh` (verts + faces) under `cam` into a W x H RGBA image. Returns an
 // RgbaImage sized W x H, row-major HWC, float [0,1]. Alpha is mesh coverage
 // (1 where the mesh covers a pixel, fractional on anti-aliased edges, 0 outside).
+//
+// If `aov` is non-null it is filled with the point-sampled data AOVs (depth,
+// position, normal, and -- when the matching `attrib` member is supplied --
+// pref/st). `attrib` may be null to skip pref/st. Both default to null so the
+// beauty-only call sites are unchanged.
 RgbaImage Render(const Mesh& mesh, const Camera& cam, int W, int H,
-                 const RasterOptions& opt);
+                 const RasterOptions& opt, RasterAov* aov = nullptr,
+                 const VertAttrib* attrib = nullptr);
 
 }  // namespace hastur

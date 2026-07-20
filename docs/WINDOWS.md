@@ -141,15 +141,17 @@ End-to-end in a host (headless Natron):
 ```powershell
 $env:OFX_PLUGIN_PATH = "C:\dev\hastur\build"
 $env:HASTUR_INPUT = "C:\dev\hastur\test-assets\synthetic_test.png"
-$env:HASTUR_OUTPUT = "C:\dev\hastur\out\depth.exr"
+$env:HASTUR_OUTPUT = "C:\dev\hastur\out\hastur.exr"
 $env:HASTUR_MODEL_DIR = "C:\path\to\sam3dbody_body.onnx"
 $env:HASTUR_ACESCG = "0"; $env:HASTUR_PROCRES = "504"
 & "C:\...\Natron\bin\NatronRenderer.exe" --clear-openfx-cache -t tests\natron\render_depth.py
 ```
 
-Expect `RESULT: PASS` and a full-size float32 depth EXR (decimeters). Verified: all
-three plugins load; HASTUR renders a 1920x1080 metric-depth EXR matching the Linux/CUDA
-and macOS/CoreML output (depth mean ~9.4 dm on the synthetic test).
+Expect `RESULT: PASS` and a full-size float32 EXR. By default the output is the
+beauty pass (neutral-grey mesh RGB + coverage alpha); the **Output AOV** param
+selects a data pass instead (Depth / Position / Normal / Pref / ST / Crypto) —
+see `docs/AOVS.md`. Verified: all three plugins load and HASTUR renders a
+1920x1080 EXR matching the Linux/CUDA and macOS/CoreML output.
 
 ### Known issue
 

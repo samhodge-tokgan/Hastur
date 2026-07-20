@@ -53,6 +53,38 @@ def main():
     def buf(name):
         return B[name]
 
+    def extract_uv(base_shape):
+        """Per-vertex texture (u,v) for the ST AOV, shape (18439,2) f32.
+
+        Prefers a real UV set from the MHR mesh if the checkpoint carries one;
+        otherwise falls back to a deterministic cylindrical unwrap of the
+        canonical `base_shape` (azimuth about the vertical axis -> u, normalized
+        height -> v). The fallback is a "simple ST" good enough for texture
+        projection / DensePose-style conditioning, not a seam-free atlas.
+        """
+        for name in ("character_torch.mesh.texcoords",
+                     "character_torch.mesh.uvs",
+                     "character_torch.mesh.uv"):
+            if name in B:
+                uv = np_f32(B[name])
+                if uv.ndim == 2 and uv.shape == (18439, 2):
+                    print(f"uv: using mesh UV set '{name}'")
+                    return uv
+        for attr in ("texcoords", "uvs", "uv"):
+            t = getattr(getattr(ct, "mesh", object()), attr, None)
+            if t is not None:
+                uv = np_f32(t)
+                if uv.ndim == 2 and uv.shape == (18439, 2):
+                    print(f"uv: using mesh.{attr}")
+                    return uv
+        # Fallback: cylindrical unwrap of base_shape (x,y,z in cm, pre-flip).
+        v = base_shape.reshape(-1, 3).astype(np.float64)
+        u = (np.arctan2(v[:, 0], v[:, 2]) / (2.0 * np.pi)) + 0.5   # azimuth
+        h = v[:, 1]
+        t = (h - h.min()) / max(1e-6, (h.max() - h.min()))         # height
+        print("uv: no mesh UV set found -> cylindrical unwrap fallback")
+        return np.stack([u, t], axis=1).astype(np.float32)
+
     # ---- pmi buffer sizes (FK prefix-multiply level split) ----
     pmi_sizes = list(m.character_torch.skeleton._pmi_buffer_sizes)
 
@@ -63,6 +95,7 @@ def main():
         "base_shape":        np_f32(buf("character_torch.blend_shape.base_shape")),      # (18439,3)
         "shape_vectors":     np_f32(buf("character_torch.blend_shape.shape_vectors")),   # (45,18439,3)
         "faces":             np_i32(buf("character_torch.mesh.faces")),                  # (36874,3)
+        "uv":                extract_uv(np_f32(buf("character_torch.blend_shape.base_shape"))),  # (18439,2) ST AOV
         # ---- parameter transform (model_params[249] -> joint_params[889]) ----
         "parameter_transform": np_f32(buf("character_torch.parameter_transform.parameter_transform")),  # (889,249)
         # ---- skeleton (local skel-state build + FK) ----

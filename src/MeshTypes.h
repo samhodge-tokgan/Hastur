@@ -20,6 +20,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace hastur {
@@ -143,9 +144,68 @@ struct RgbaImage {
   std::vector<float> data;  // width*height*4
 };
 
+// ---------------------------------------------------------------------------
+// AOV (arbitrary output variable) buffers — the geometry the rasterizer already
+// computes per fragment, surfaced for downstream comp. Input-frame resolution,
+// row-major HWC, top-down (same orientation as RgbaImage). Uncovered pixels are
+// 0 in every buffer; `coverage` (== beauty alpha) marks validity.
+//
+// IMPORTANT: these are POINT-SAMPLED (nearest surface at each pixel), NOT
+// anti-aliased like the beauty render. Box-averaging depth/position/normal/pref
+// across a silhouette edge invents surfaces that do not exist; silhouette
+// softness is represented by Cryptomatte coverage, not by blending these values.
+//
+//   depth:    [W*H]    camera-space Z (metres, >0 in front).
+//   position: [W*H*3]  camera-space surface position (m). Camera at origin,
+//                      +Z forward, so this frame IS the world (worldToCamera=I).
+//   normal:   [W*H*3]  camera-space unit normal, oriented toward the camera.
+//   pref:     [W*H*3]  canonical rest-pose reference position (pose/shape-
+//                      invariant body atlas coord) for locator/texture pinning.
+//   st:       [W*H*2]  texture (u,v); valid only when has_st (a UV set exists).
+//   coverage: [W*H]    total mesh coverage (== beauty alpha), for convenience.
+struct AovBuffers {
+  int width{}, height{};
+  bool has_st{false};
+  std::vector<float> depth;     // W*H
+  std::vector<float> position;  // W*H*3
+  std::vector<float> normal;    // W*H*3
+  std::vector<float> pref;      // W*H*3
+  std::vector<float> st;        // W*H*2
+  std::vector<float> coverage;  // W*H
+};
+
+// Cryptomatte output (Psyop spec): per-pixel ranked (id, coverage) pairs packed
+// two ranks per RGBA layer — layer[0] = (id0,cov0,id1,cov1), layer[1] = ranks
+// 2,3, ... Each layer is W*H*4, top-down HWC. `manifest` is the JSON name->hash
+// map; `type_name` is the layer/typename ("person"). Empty `layers` = no people.
+struct CryptoResult {
+  int width{}, height{};
+  std::string type_name;                     // e.g. "person"
+  std::string manifest;                      // JSON {"person_00":"<8hex>", ...}
+  std::vector<std::vector<float>> layers;    // each W*H*4, two ranks per layer
+};
+
+// 4x4 row-major camera matrices (m44f, 16 floats). Built from the FRAME-level
+// intrinsics (the single consistent camera — per-person cam_t is object
+// placement, not a shared camera). worldToNDC maps camera/world -> normalized
+// device coords in [-1,1]; NDCToWorld is its inverse (unproject). worldToCamera
+// is identity for this canonical pinhole (camera at origin, +Z forward).
+struct CameraMatrices {
+  float focal{};                        // fx = fy (px)
+  std::array<float, 2> principal{};     // (cx, cy) px
+  int width{}, height{};
+  float near_z{}, far_z{};
+  std::array<float, 16> world_to_ndc{};
+  std::array<float, 16> ndc_to_world{};
+};
+
 struct FrameResult {
   std::vector<PersonResult> people;  // depth-ordered for over-composite
   RgbaImage render;                  // grey mesh(es) + coverage alpha
+  // AOV extensions (append-only; populated only when AOV emission is requested).
+  AovBuffers aovs;
+  CryptoResult crypto;
+  CameraMatrices camera;
 };
 
 }  // namespace hastur

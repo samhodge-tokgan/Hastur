@@ -10,13 +10,16 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <vector>
 
 #include <onnxruntime_cxx_api.h>
 
+#include "CameraMatrix.h"
 #include "CameraSolver.h"
 #include "CropAffine.h"
+#include "Cryptomatte.h"
 #include "DetectorEngine.h"
 #include "HandRefinerEngine.h"
 #include "MeshAssets.h"
@@ -578,12 +581,34 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
     return result.people[a].cam.cam_t[2] > result.people[b].cam.cam_t[2];
   });
 
+  // AOV setup: a shared canonical Pref attribute (base_shape, transformed into the
+  // posed mesh frame: cm->m and the [1,2] axis flip, matching MhrModel's output)
+  // and, when a UV set exists, the ST attribute. Both are per-vertex and shared
+  // across people (topology/vertex order are identical for every person).
+  std::vector<float> pref;
+  VertAttrib attrib;
+  const bool st_available = p.emit_aovs && s.assets && s.assets->has("uv");
+  if (p.emit_aovs && s.assets) {
+    const float* base = s.assets->f32("base_shape");  // (kNumVerts,3), cm, pre-flip
+    pref.resize(static_cast<size_t>(kNumVerts) * 3);
+    for (int i = 0; i < kNumVerts; ++i) {
+      pref[3 * i + 0] = base[3 * i + 0] * 0.01f;
+      pref[3 * i + 1] = -base[3 * i + 1] * 0.01f;
+      pref[3 * i + 2] = -base[3 * i + 2] * 0.01f;
+    }
+    attrib.pref = pref.data();
+    attrib.uv = st_available ? s.assets->f32("uv") : nullptr;
+  }
+  std::vector<RasterAov> person_aov(p.emit_aovs ? result.people.size() : 0);
+
   auto tr = Clock::now();
   std::vector<float>& acc = result.render.data;  // premultiplied accumulator
   for (int idx : order) {
     const PersonResult& person = result.people[idx];
     if (person.mesh.verts.empty()) continue;
-    RgbaImage r = Render(person.mesh, person.cam, W, H, ropt);
+    RasterAov* aptr = p.emit_aovs ? &person_aov[idx] : nullptr;
+    RgbaImage r = Render(person.mesh, person.cam, W, H, ropt, aptr,
+                         p.emit_aovs ? &attrib : nullptr);
     if (static_cast<int>(r.data.size()) != W * H * 4) continue;
     OverComposite(acc, r.data);  // r is premultiplied (ropt.premultiply=true)
   }
@@ -600,6 +625,66 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
         acc[i + 2] /= a;
       }
     }
+  }
+
+  // --- 8. AOV assembly (optional) -----------------------------------------
+  if (p.emit_aovs) {
+    auto ta = Clock::now();
+    const size_t n1 = static_cast<size_t>(W) * H;
+    AovBuffers& av = result.aovs;
+    av.width = W;
+    av.height = H;
+    av.has_st = st_available;
+    av.depth.assign(n1, 0.f);
+    av.position.assign(n1 * 3, 0.f);
+    av.normal.assign(n1 * 3, 0.f);
+    av.pref.assign(n1 * 3, 0.f);
+    av.st.assign(st_available ? n1 * 2 : 0, 0.f);
+    av.coverage.assign(n1, 0.f);
+
+    // Merge per-person data by nearest depth (a true cross-person z-buffer: the
+    // frontmost surface at each pixel wins the point sample).
+    std::vector<float> best_z(n1, std::numeric_limits<float>::infinity());
+    for (const RasterAov& a : person_aov) {
+      if (a.coverage.size() != n1) continue;
+      for (size_t px = 0; px < n1; ++px) {
+        if (a.coverage[px] <= 0.f) continue;
+        const float z = a.depth[px];
+        if (z <= 0.f || z >= best_z[px]) continue;
+        best_z[px] = z;
+        av.depth[px] = z;
+        for (int k = 0; k < 3; ++k) {
+          av.position[px * 3 + k] = a.position[px * 3 + k];
+          av.normal[px * 3 + k] = a.normal[px * 3 + k];
+          av.pref[px * 3 + k] = a.pref[px * 3 + k];
+        }
+        if (st_available)
+          for (int k = 0; k < 2; ++k) av.st[px * 2 + k] = a.st[px * 2 + k];
+      }
+    }
+    // Coverage AOV == final composited alpha.
+    for (size_t px = 0; px < n1; ++px) av.coverage[px] = acc[px * 4 + 3];
+
+    // Cryptomatte: persons front-to-back (near first = reverse of paint order).
+    std::vector<CryptoPerson> cps;
+    cps.reserve(order.size());
+    int rank = 0;
+    for (auto it = order.rbegin(); it != order.rend(); ++it) {
+      RasterAov& a = person_aov[*it];
+      if (a.coverage.size() != n1) continue;
+      char nm[16];
+      std::snprintf(nm, sizeof(nm), "person_%02d", rank++);
+      CryptoPerson cp;
+      cp.name = nm;
+      cp.coverage = std::move(a.coverage);
+      cps.push_back(std::move(cp));
+    }
+    result.crypto = BuildCryptomatte(W, H, "person", cps, p.crypto_levels);
+
+    // Frame-level camera matrices (m44f) from the shared intrinsics.
+    result.camera = BuildCameraMatrices(CamFocalX(K), CamCx(K), CamCy(K), W, H,
+                                        p.near_z, p.far_z);
+    LogStage("aov-assembly", Ms(ta, Clock::now()));
   }
 
   last_error_.clear();

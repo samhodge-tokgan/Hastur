@@ -43,6 +43,7 @@ i64 shape[4]; u64 offset; u64 nbytes}`, then 8-byte-aligned data.
 | `base_shape` | (18439,3) | f32 | `character_torch.blend_shape.base_shape` |
 | `shape_vectors` | (45,18439,3) | f32 | `character_torch.blend_shape.shape_vectors` |
 | `faces` | (36874,3) | i32 | `character_torch.mesh.faces` |
+| `uv` | (18439,2) | f32 | mesh UV set if present, else cylindrical unwrap of `base_shape` (see `extract_uv`) |
 | `parameter_transform` | (889,249) | f32 | `character_torch.parameter_transform.parameter_transform` |
 | `joint_translation_offsets` | (127,3) | f32 | `character_torch.skeleton.joint_translation_offsets` |
 | `joint_prerotations` | (127,4) | f32 | `character_torch.skeleton.joint_prerotations` (quat xyzw) |
