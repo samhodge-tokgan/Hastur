@@ -57,7 +57,7 @@
   "Body via ONNX Runtime with hardware acceleration."
 #define kPluginIdentifier "com.tokgan.Sam3dBody"
 #define kPluginVersionMajor 0
-#define kPluginVersionMinor 4
+#define kPluginVersionMinor 5
 
 // Param names.
 #define kParamModelDir "modelDir"
@@ -953,13 +953,16 @@ void Sam3dBodyFactory::describeInContext(OFX::ImageEffectDescriptor& desc,
   {
     DoubleParamDescriptor* p = desc.defineDoubleParam(kParamScoreThresh);
     p->setLabels("Detector threshold", "Det threshold", "Detector score threshold");
-    p->setHint("Minimum person-detection score. The default detector "
-               "(Faster R-CNN R50-FPN) scores real people ~1.0, so a high "
-               "threshold removes flicker and rejects false positives (e.g. "
-               "animals detected as people ~0.7).");
+    p->setHint("Minimum person-detection score. The detector ONNX exports boxes "
+               "down to ~0.05, so this gate does the real filtering. Close "
+               "subjects pin ~1.0, but distant / backlit / partially-occluded "
+               "people score lower and a high gate drops them frame-to-frame "
+               "(flicker / bare-shadow dropouts). Default 0.3 keeps distant "
+               "subjects covered; raise toward 0.85 if false positives appear "
+               "(e.g. animals ~0.7).");
     p->setRange(0.0, 1.0);
     p->setDisplayRange(0.0, 1.0);
-    p->setDefault(0.85);
+    p->setDefault(0.3);
     page->addChild(*p);
   }
   {

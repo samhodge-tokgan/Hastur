@@ -39,7 +39,7 @@ struct PipelineParams {
   std::string model_dir;
   ComputeUnits units = ComputeUnits::All;
 
-  float detector_score_thresh = 0.5f;  // person score gate
+  float detector_score_thresh = 0.3f;  // person score gate (v0.5.0: 0.85->0.3, distant-subject recall)
   int max_people = 1;                  // cap the per-person loop (M4: 1)
 
   float grey = 0.6f;                   // neutral clay albedo (linear, garment off)
