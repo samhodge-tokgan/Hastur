@@ -96,6 +96,7 @@ RgbaImage Render(const Mesh& mesh, const Camera& cam, int W, int H,
   out.data.assign(static_cast<size_t>(W) * H * 4, 0.0f);
   const bool want_aov = (aov != nullptr);
   const bool want_pref = want_aov && attrib && attrib->pref;
+  const bool want_nref = want_aov && attrib && attrib->nref;
   const bool want_st = want_aov && attrib && attrib->uv;
   // Garment mask drives the BEAUTY albedo, so it is NOT gated on AOV emission.
   const bool want_leo = attrib && attrib->leotardness;
@@ -109,6 +110,7 @@ RgbaImage Render(const Mesh& mesh, const Camera& cam, int W, int H,
     aov->normal.assign(n1 * 3, 0.0f);
     aov->coverage.assign(n1, 0.0f);
     aov->pref.assign(want_pref ? n1 * 3 : 0, 0.0f);
+    aov->nref.assign(want_nref ? n1 * 3 : 0, 0.0f);
     aov->st.assign(want_st ? n1 * 2 : 0, 0.0f);
   }
   if (W <= 0 || H <= 0 || !mesh.faces || mesh.verts.empty()) return out;
@@ -161,12 +163,13 @@ RgbaImage Render(const Mesh& mesh, const Camera& cam, int W, int H,
 
   // Supersampled data-AOV buffers (only when requested). Written for the winning
   // (nearest) subsample; resolved by NEAREST at downsample time, never averaged.
-  std::vector<float> fb_z, fb_pos, fb_nrm, fb_pref, fb_st;
+  std::vector<float> fb_z, fb_pos, fb_nrm, fb_pref, fb_nref, fb_st;
   if (want_aov) {
     fb_z.assign(npix, 0.0f);
     fb_pos.assign(npix * 3, 0.0f);
     fb_nrm.assign(npix * 3, 0.0f);
     if (want_pref) fb_pref.assign(npix * 3, 0.0f);
+    if (want_nref) fb_nref.assign(npix * 3, 0.0f);
     if (want_st) fb_st.assign(npix * 2, 0.0f);
   }
 
@@ -273,6 +276,18 @@ RgbaImage Render(const Mesh& mesh, const Camera& cam, int W, int H,
               fb_pref[idx * 3 + k] =
                   (w0 * pa[k] * ia + w1 * pb[k] * ib + w2 * pc[k] * ic) * z;
           }
+          if (want_nref) {
+            const float* na = attrib->nref + 3 * i0;
+            const float* nb = attrib->nref + 3 * i1;
+            const float* nc = attrib->nref + 3 * i2;
+            float nn[3];
+            for (int k = 0; k < 3; ++k)
+              nn[k] = w0 * na[k] * ia + w1 * nb[k] * ib + w2 * nc[k] * ic;
+            const float len =
+                std::sqrt(nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2]);
+            const float s = len > 1e-8f ? 1.0f / len : 0.0f;
+            for (int k = 0; k < 3; ++k) fb_nref[idx * 3 + k] = nn[k] * s;
+          }
           if (want_st) {
             const float* ua = attrib->uv + 2 * i0;
             const float* ub = attrib->uv + 2 * i1;
@@ -324,6 +339,9 @@ RgbaImage Render(const Mesh& mesh, const Camera& cam, int W, int H,
           if (want_pref)
             for (int k = 0; k < 3; ++k)
               aov->pref[d1 * 3 + k] = fb_pref[best_si * 3 + k];
+          if (want_nref)
+            for (int k = 0; k < 3; ++k)
+              aov->nref[d1 * 3 + k] = fb_nref[best_si * 3 + k];
           if (want_st)
             for (int k = 0; k < 2; ++k)
               aov->st[d1 * 2 + k] = fb_st[best_si * 2 + k];

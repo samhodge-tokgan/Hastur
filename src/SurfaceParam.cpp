@@ -75,4 +75,41 @@ std::vector<float> ComputeCylindricalUV(const float* base_shape_cm, int nverts) 
   return out;
 }
 
+std::vector<float> ComputeRestNormals(const float* verts, const int32_t* faces,
+                                      int nverts, int nfaces) {
+  std::vector<float> N;
+  if (!verts || !faces || nverts <= 0 || nfaces <= 0) return N;
+  N.assign(static_cast<size_t>(nverts) * 3, 0.0f);
+  // Accumulate area-weighted face normals (unnormalised cross product) onto each
+  // incident vertex, then normalise -- matches the rasterizer's vertex normals.
+  for (int f = 0; f < nfaces; ++f) {
+    const int i0 = faces[3 * f + 0], i1 = faces[3 * f + 1], i2 = faces[3 * f + 2];
+    if (i0 < 0 || i1 < 0 || i2 < 0 || i0 >= nverts || i1 >= nverts || i2 >= nverts)
+      continue;
+    const float* a = &verts[3 * i0];
+    const float* b = &verts[3 * i1];
+    const float* c = &verts[3 * i2];
+    const float e1[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+    const float e2[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+    const float fn[3] = {e1[1] * e2[2] - e1[2] * e2[1],
+                         e1[2] * e2[0] - e1[0] * e2[2],
+                         e1[0] * e2[1] - e1[1] * e2[0]};
+    for (int k = 0; k < 3; ++k) {
+      N[3 * i0 + k] += fn[k];
+      N[3 * i1 + k] += fn[k];
+      N[3 * i2 + k] += fn[k];
+    }
+  }
+  for (int i = 0; i < nverts; ++i) {
+    float* n = &N[3 * i];
+    const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    if (len > 1e-12f) {
+      n[0] /= len;
+      n[1] /= len;
+      n[2] /= len;
+    }
+  }
+  return N;
+}
+
 }  // namespace hastur

@@ -163,8 +163,9 @@ struct Sam3dBodyPipeline::Impl {
   // at load from the canonical base_shape (shot-invariant). pref_norm is the
   // canonical body position normalised to [0,1]^3; st_uv is a cylindrical UV
   // unwrap used only when the assets carry no real "uv" block.
-  std::vector<float> pref_norm;  // kNumVerts*3, [0,1]
-  std::vector<float> st_uv;      // kNumVerts*2, cylindrical fallback
+  std::vector<float> pref_norm;     // kNumVerts*3, [0,1]
+  std::vector<float> st_uv;         // kNumVerts*2, cylindrical fallback
+  std::vector<float> rest_normals;  // kNumVerts*3, bind-pose normals (Nref AOV)
 
   // M7 hand refiner: located at load, created lazily on the first gated hand.
   std::string hand_path;                        // empty -> refinement disabled
@@ -277,8 +278,15 @@ bool Sam3dBodyPipeline::EnsureLoaded(const PipelineParams& p) {
     std::array<float, kParamDim> zero_pred{};
     const Mesh rest = s.mhr->Run(zero_pred, /*pose_corrective=*/nullptr);
     s.leotard_mask = ComputeLeotardMask(rest);
+    // Bind-pose normals (Nref AOV) from the same rest mesh (verts + faces).
+    if (rest.faces && !rest.verts.empty()) {
+      const int nfaces = static_cast<int>(rest.faces->size() / 3);
+      s.rest_normals = ComputeRestNormals(rest.verts.data(), rest.faces->data(),
+                                          kNumVerts, nfaces);
+    }
   } catch (...) {
     s.leotard_mask.clear();
+    s.rest_normals.clear();
   }
 
   // Surface parametrisation for the Pref/ST AOVs, from the canonical base_shape
@@ -642,6 +650,7 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
   const bool st_available = p.emit_aovs && uv_src != nullptr;
   if (p.emit_aovs) {
     attrib.pref = s.pref_norm.empty() ? nullptr : s.pref_norm.data();
+    attrib.nref = s.rest_normals.empty() ? nullptr : s.rest_normals.data();
     attrib.uv = uv_src;
   }
   std::vector<RasterAov> person_aov(p.emit_aovs ? result.people.size() : 0);
@@ -686,6 +695,8 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
     av.position.assign(n1 * 3, 0.f);
     av.normal.assign(n1 * 3, 0.f);
     av.pref.assign(n1 * 3, 0.f);
+    const bool nref_available = !s.rest_normals.empty();
+    av.nref.assign(nref_available ? n1 * 3 : 0, 0.f);
     av.st.assign(st_available ? n1 * 2 : 0, 0.f);
     av.coverage.assign(n1, 0.f);
 
@@ -705,6 +716,8 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
           av.normal[px * 3 + k] = a.normal[px * 3 + k];
           av.pref[px * 3 + k] = a.pref[px * 3 + k];
         }
+        if (nref_available && a.nref.size() == n1 * 3)
+          for (int k = 0; k < 3; ++k) av.nref[px * 3 + k] = a.nref[px * 3 + k];
         if (st_available)
           for (int k = 0; k < 2; ++k) av.st[px * 2 + k] = a.st[px * 2 + k];
       }

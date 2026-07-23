@@ -57,7 +57,7 @@
   "Body via ONNX Runtime with hardware acceleration."
 #define kPluginIdentifier "com.tokgan.Sam3dBody"
 #define kPluginVersionMajor 0
-#define kPluginVersionMinor 6
+#define kPluginVersionMinor 7
 
 // Param names.
 #define kParamModelDir "modelDir"
@@ -92,6 +92,8 @@ enum HasturAov {
   kAovST,
   kAovCrypto00,
   kAovCrypto01,
+  // Appended after Crypto01 to preserve existing outputAov choice indices.
+  kAovNref,
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -213,6 +215,7 @@ const PlaneDef kPlanes[] = {
     {kAovPosition, "hastur.position", "Position", {"X", "Y", "Z", nullptr}, 3},
     {kAovNormal, "hastur.normal", "Normal", {"X", "Y", "Z", nullptr}, 3},
     {kAovPref, "hastur.pref", "Pref", {"X", "Y", "Z", nullptr}, 3},
+    {kAovNref, "hastur.nref", "Nref", {"X", "Y", "Z", nullptr}, 3},
     {kAovST, "hastur.st", "ST", {"U", "V", nullptr, nullptr}, 2},
     {kAovCrypto00, "hastur.CryptoObject00", "CryptoObject00", {"R", "G", "B", "A"}, 4},
     {kAovCrypto01, "hastur.CryptoObject01", "CryptoObject01", {"R", "G", "B", "A"}, 4},
@@ -666,6 +669,13 @@ bool Sam3dBodyPlugin::renderPipeline(const OFX::RenderArguments& args) {
         }
         o[3] = cov;
         break;
+      case kAovNref:
+        if (px * 3 + 2 < av.nref.size()) {
+          o[0] = av.nref[px * 3]; o[1] = av.nref[px * 3 + 1];
+          o[2] = av.nref[px * 3 + 2];
+        }
+        o[3] = cov;
+        break;
       case kAovST:
         if (av.has_st && px * 2 + 1 < av.st.size()) {
           o[0] = av.st[px * 2]; o[1] = av.st[px * 2 + 1];
@@ -1079,6 +1089,7 @@ void Sam3dBodyFactory::describeInContext(OFX::ImageEffectDescriptor& desc,
     p->appendOption("ST (texture UV)");
     p->appendOption("CryptoObject00 (ranks 0,1)");
     p->appendOption("CryptoObject01 (ranks 2,3)");
+    p->appendOption("Nref (bind-pose normal)");
     p->setDefault(kAovBeauty);
     page->addChild(*p);
   }

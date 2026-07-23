@@ -15,6 +15,7 @@ delivery. True multi-plane single-node output (Nuke/Natron) is a follow-up
 | **Position (XYZ)** | XYZ, A=coverage | camera = world, metres | per-pixel surface position (camera at origin) |
 | **Normal (XYZ)** | XYZ, A=coverage | camera, unit | oriented toward camera; for relighting |
 | **Pref** | XYZ, A=coverage | canonical rest, **normalised [0,1]³** | pose/shape-invariant body coord for locator/texture pinning; positive & shot-invariant (normalised by the fixed canonical bbox) |
+| **Nref** | XYZ, A=coverage | canonical rest, unit | **bind-pose surface normal** — orientation counterpart to Pref; static per-vertex (rest-mesh normals), from load. `(Pref,Nref)` = a per-point canonical surface frame |
 | **ST** | U,V→RG, A=coverage | texture UV, [0,1] | per-vertex UV, **always available**: a real `uv` asset block if present, else a deterministic **cylindrical unwrap** computed at load |
 | **CryptoObject00** | RGBA | — | Cryptomatte ranks 0,1 = (id0,cov0,id1,cov1) |
 | **CryptoObject01** | RGBA | — | Cryptomatte ranks 2,3 |
@@ -86,12 +87,19 @@ derivatives); **Cryptomatte** adds per-person separation.
 - **Per-person isolation** — Cryptomatte mattes for grades / relights / holdouts.
 - **Deep holdouts (Phase 2)** — front/back-Z → `DeepFromImage` → `DeepHoldout`.
 - **Locator/texture pinning & 2.5D remapping** — the normalised Pref is a stable
-  positive body coordinate you can look up/compare across pose, frames and shots;
-  pair it with **Normal** for a surface frame (→ a per-point 4×4 of position +
-  rotation + scale, curve/Kalman-smoothed for a usable tracked locator). **ST**
-  gives a 2D surface parametrisation for projecting/reading textures and remapping
-  surface features. The cylindrical unwrap has a back seam and pole compression
-  (it is not a seam-free atlas); a baked artist `uv` asset supersedes it when present.
+  positive body coordinate you can look up/compare across pose, frames and shots.
+  **ST** gives a 2D surface parametrisation for projecting/reading textures and
+  remapping surface features. The cylindrical unwrap has a back seam and pole
+  compression (not a seam-free atlas); a baked artist `uv` asset supersedes it.
+- **Deterministic screen-space skin binding (Pref + Nref)** — every covered pixel
+  carries both its **canonical surface frame** — `Pref` (bind position) + `Nref`
+  (bind normal) + `ST` (surface uv) — and its **posed/observed frame** — `Position`
+  + `Normal` (camera space). That per-pixel bind↔posed correspondence is a **4×4**
+  (position + rotation, + scale from local metric) mapping canonical to camera;
+  curve/Kalman-smooth it for a usable tracked locator. Because the canonical key is
+  fixed per surface point, the binding is **deterministic** (same surface point →
+  same key every frame), not a per-frame re-solve — so geo/decals/markers pin to
+  the skin, and textures project & re-read across pose, without an iterative solve.
 - **ControlNet / video-diffusion conditioning** — Normal, Depth, ST (DensePose-like
   IUV) and per-person masks are the geometry-conditioning channels such models train
   on. Temporal stability (Phase 3) matters for the *video* case.
