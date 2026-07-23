@@ -81,6 +81,7 @@ struct RasterAov {
   std::vector<float> position;  // W*H*3   camera-space surface position (m)
   std::vector<float> normal;    // W*H*3   camera-space unit normal (toward cam)
   std::vector<float> pref;      // W*H*3   canonical reference position
+  std::vector<float> nref;      // W*H*3   canonical bind-pose surface normal
   std::vector<float> st;        // W*H*2   texture (u,v)
   std::vector<float> coverage;  // W*H     anti-aliased coverage (== alpha)
 };
@@ -89,6 +90,7 @@ struct RasterAov {
 // order. Null members are emitted as zeros (and, for uv, RasterAov::has_st=false).
 struct VertAttrib {
   const float* pref = nullptr;  // kNumVerts*3 canonical reference position
+  const float* nref = nullptr;  // kNumVerts*3 canonical bind-pose surface normal
   const float* uv = nullptr;    // kNumVerts*2 texture coordinates
   // Per-vertex garment mask in [0,1] (1 = leotard, 0 = skin). Drives the beauty
   // albedo when RasterOptions::garment is set; unlike pref/uv it is NOT gated on

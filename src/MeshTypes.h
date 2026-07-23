@@ -161,6 +161,8 @@ struct RgbaImage {
 //   normal:   [W*H*3]  camera-space unit normal, oriented toward the camera.
 //   pref:     [W*H*3]  canonical rest-pose reference position (pose/shape-
 //                      invariant body atlas coord) for locator/texture pinning.
+//   nref:     [W*H*3]  canonical bind-pose surface normal (orientation counterpart
+//                      to pref); with pref gives a per-point canonical surface frame.
 //   st:       [W*H*2]  texture (u,v); valid only when has_st (a UV set exists).
 //   coverage: [W*H]    total mesh coverage (== beauty alpha), for convenience.
 struct AovBuffers {
@@ -170,6 +172,7 @@ struct AovBuffers {
   std::vector<float> position;  // W*H*3
   std::vector<float> normal;    // W*H*3
   std::vector<float> pref;      // W*H*3
+  std::vector<float> nref;      // W*H*3
   std::vector<float> st;        // W*H*2
   std::vector<float> coverage;  // W*H
 };

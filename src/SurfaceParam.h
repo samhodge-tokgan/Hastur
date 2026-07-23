@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 namespace hastur {
@@ -32,5 +33,14 @@ std::vector<float> ComputePrefNormalized(const float* base_shape_cm, int nverts)
 // good enough for texture projection / DensePose-style conditioning / 2.5D
 // remapping -- not a seam-free artist atlas.
 std::vector<float> ComputeCylindricalUV(const float* base_shape_cm, int nverts);
+
+// Per-vertex BIND-POSE (rest) surface normal, (nverts*3), unit length. Area-
+// weighted vertex normals of the canonical rest mesh (verts in the posed-mesh
+// frame, e.g. MhrModel::Run(zero); faces = kFaces). This is the orientation
+// counterpart to ComputePrefNormalized: (Pref, Nref) give a per-point canonical
+// surface frame, which paired with the posed Position/Normal AOVs yields the
+// bind<->posed correspondence for deterministic screen-space skin binding.
+std::vector<float> ComputeRestNormals(const float* verts, const int32_t* faces,
+                                      int nverts, int nfaces);
 
 }  // namespace hastur
