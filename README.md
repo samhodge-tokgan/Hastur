@@ -24,11 +24,18 @@ mesh(es) from a single frame and renders them **in neutral grey with a coverage 
 > [humbaba](https://github.com/samhodge-tokgan/humbaba) (DepthAnything3) and reuses its cross-platform ORT/OFX scaffold.
 
 <p align="center">
-  <img src="docs/screenshots/aov_contact_sheet.png" width="720" alt="One frame of two overlapping people, broken out into Beauty, Depth, Normal, Position, Pref and Cryptomatte AOV passes"><br>
-  <em>One frame → a full <b>multi-plane AOV</b> set — <b>Beauty · Depth · Normal · Position · Pref · Cryptomatte</b> — as a single
+  <img src="docs/screenshots/aov_contact_sheet.png" width="760" alt="One frame of two overlapping people, broken out into Beauty, Depth, Normal, Nref, Position, Pref and Cryptomatte AOV passes, plus a box bound to a wakesurfer's skin"><br>
+  <em>One frame → a full <b>multi-plane AOV</b> set — <b>Beauty · Depth · Normal · Nref · Position · Pref · Cryptomatte</b> — as a single
   multilayer OpenEXR (native single-node in <b>Natron</b>; via the <b>Output AOV</b> stack in Nuke/Flame). The <b>2.5D data</b>
   (metric depth, world position, normals, per-person ID mattes) characterises the humans in the shot for scene understanding,
-  relighting and comp. Two overlapping subjects, cleanly separated by Cryptomatte ID.</em>
+  relighting and comp; the canonical <b>Pref + Nref</b> pair gives each pixel a stable surface frame for
+  <b><a href="docs/skin_bind.gif">deterministic screen-space skin binding</a></b>.</em>
+</p>
+
+<p align="center">
+  <a href="docs/skin_bind.gif"><img src="docs/skin_bind.gif" width="240" alt="A shaded box deterministically bound to a wakesurfer's shoulder, tracking it across 48 frames"></a><br>
+  <em><b>Deterministic skin binding</b> — a box pinned to a surface point via <b>Pref</b> (position) + <b>Nref</b> (orientation) → a per-pixel
+  4×4, tracking the shoulder across frames with no solve. See <b><a href="docs/AOVS.md">docs/AOVS.md</a></b>.</em>
 </p>
 
 - **Input:** RGB(A) frame buffer (sRGB display-referred or ACEScg working space).

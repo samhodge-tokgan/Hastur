@@ -94,7 +94,9 @@ derivatives); **Cryptomatte** adds per-person separation.
 - **Deterministic screen-space skin binding (Pref + Nref)** — every covered pixel
   carries both its **canonical surface frame** — `Pref` (bind position) + `Nref`
   (bind normal) + `ST` (surface uv) — and its **posed/observed frame** — `Position`
-  + `Normal` (camera space). That per-pixel bind↔posed correspondence is a **4×4**
+  + `Normal` (camera space). ![skin binding](skin_bind.gif) *(a box pinned to a
+  wakesurfer's shoulder, tracking it across 48 frames with no solve.)* That
+  per-pixel bind↔posed correspondence is a **4×4**
   (position + rotation, + scale from local metric) mapping canonical to camera;
   curve/Kalman-smooth it for a usable tracked locator. Because the canonical key is
   fixed per surface point, the binding is **deterministic** (same surface point →
