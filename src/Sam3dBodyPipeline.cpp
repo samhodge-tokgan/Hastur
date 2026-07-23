@@ -22,6 +22,7 @@
 #include "Cryptomatte.h"
 #include "DetectorEngine.h"
 #include "LeotardMask.h"
+#include "SurfaceParam.h"
 #include "HandRefinerEngine.h"
 #include "MeshAssets.h"
 #include "MhrModel.h"
@@ -158,6 +159,13 @@ struct Sam3dBodyPipeline::Impl {
   // once at load from the rest-pose landmarks. Empty -> garment disabled.
   std::vector<float> leotard_mask;
 
+  // Static per-vertex surface parametrisation for the Pref/ST AOVs, computed once
+  // at load from the canonical base_shape (shot-invariant). pref_norm is the
+  // canonical body position normalised to [0,1]^3; st_uv is a cylindrical UV
+  // unwrap used only when the assets carry no real "uv" block.
+  std::vector<float> pref_norm;  // kNumVerts*3, [0,1]
+  std::vector<float> st_uv;      // kNumVerts*2, cylindrical fallback
+
   // M7 hand refiner: located at load, created lazily on the first gated hand.
   std::string hand_path;                        // empty -> refinement disabled
   std::unique_ptr<HandRefinerEngine> hand;      // lazy
@@ -271,6 +279,20 @@ bool Sam3dBodyPipeline::EnsureLoaded(const PipelineParams& p) {
     s.leotard_mask = ComputeLeotardMask(rest);
   } catch (...) {
     s.leotard_mask.clear();
+  }
+
+  // Surface parametrisation for the Pref/ST AOVs, from the canonical base_shape
+  // (once, at load). pref_norm is always computed; st_uv (cylindrical fallback)
+  // only when the assets carry no real "uv" block. Non-fatal.
+  try {
+    if (s.assets && s.assets->has("base_shape")) {
+      const float* base = s.assets->f32("base_shape");  // (kNumVerts,3) cm, pre-flip
+      s.pref_norm = ComputePrefNormalized(base, kNumVerts);
+      if (!s.assets->has("uv")) s.st_uv = ComputeCylindricalUV(base, kNumVerts);
+    }
+  } catch (...) {
+    s.pref_norm.clear();
+    s.st_uv.clear();
   }
 
   s.ok = true;
@@ -606,22 +628,21 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
   // posed mesh frame: cm->m and the [1,2] axis flip, matching MhrModel's output)
   // and, when a UV set exists, the ST attribute. Both are per-vertex and shared
   // across people (topology/vertex order are identical for every person).
-  std::vector<float> pref;
   VertAttrib attrib;
   // Garment mask (static per-vertex, computed once at load) — drives the beauty
   // albedo, so it is always supplied (not gated on AOV emission).
   if (ropt.garment) attrib.leotardness = s.leotard_mask.data();
-  const bool st_available = p.emit_aovs && s.assets && s.assets->has("uv");
-  if (p.emit_aovs && s.assets) {
-    const float* base = s.assets->f32("base_shape");  // (kNumVerts,3), cm, pre-flip
-    pref.resize(static_cast<size_t>(kNumVerts) * 3);
-    for (int i = 0; i < kNumVerts; ++i) {
-      pref[3 * i + 0] = base[3 * i + 0] * 0.01f;
-      pref[3 * i + 1] = -base[3 * i + 1] * 0.01f;
-      pref[3 * i + 2] = -base[3 * i + 2] * 0.01f;
-    }
-    attrib.pref = pref.data();
-    attrib.uv = st_available ? s.assets->f32("uv") : nullptr;
+  // Pref (normalised canonical position) and ST (uv) are computed once at load.
+  // Prefer a real "uv" asset block if present; else use the cylindrical unwrap.
+  const float* uv_src = nullptr;
+  if (s.assets && s.assets->has("uv"))
+    uv_src = s.assets->f32("uv");
+  else if (!s.st_uv.empty())
+    uv_src = s.st_uv.data();
+  const bool st_available = p.emit_aovs && uv_src != nullptr;
+  if (p.emit_aovs) {
+    attrib.pref = s.pref_norm.empty() ? nullptr : s.pref_norm.data();
+    attrib.uv = uv_src;
   }
   std::vector<RasterAov> person_aov(p.emit_aovs ? result.people.size() : 0);
   // Pass the attribute whenever AOVs are requested OR the garment needs its mask.

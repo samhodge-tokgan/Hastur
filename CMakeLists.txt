@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Hastur VERSION 0.5.0 LANGUAGES CXX)
+project(Hastur VERSION 0.6.0 LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
 # Options
@@ -246,6 +246,7 @@ if(HASTUR_WITH_ONNX)
     src/CameraMatrix.cpp
     src/Cryptomatte.cpp
     src/LeotardMask.cpp
+    src/SurfaceParam.cpp
     src/OrtSessionManager.cpp
     src/SoftwareRasterizer.cpp
     src/Sam3dBodyPipeline.cpp
@@ -428,6 +429,7 @@ if(HASTUR_WITH_ONNX)
     src/CameraMatrix.cpp
     src/Cryptomatte.cpp
     src/LeotardMask.cpp
+    src/SurfaceParam.cpp
     src/OrtSessionManager.cpp
     src/SoftwareRasterizer.cpp
     src/Sam3dBodyPipeline.cpp

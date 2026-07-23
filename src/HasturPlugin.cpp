@@ -57,7 +57,7 @@
   "Body via ONNX Runtime with hardware acceleration."
 #define kPluginIdentifier "com.tokgan.Sam3dBody"
 #define kPluginVersionMajor 0
-#define kPluginVersionMinor 5
+#define kPluginVersionMinor 6
 
 // Param names.
 #define kParamModelDir "modelDir"
