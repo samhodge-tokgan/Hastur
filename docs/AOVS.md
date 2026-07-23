@@ -14,8 +14,8 @@ delivery. True multi-plane single-node output (Nuke/Natron) is a follow-up
 | **Depth (Z)** | Z→RGB, A=coverage | camera, metres, +Z fwd | metric depth of the frontmost surface |
 | **Position (XYZ)** | XYZ, A=coverage | camera = world, metres | per-pixel surface position (camera at origin) |
 | **Normal (XYZ)** | XYZ, A=coverage | camera, unit | oriented toward camera; for relighting |
-| **Pref** | XYZ, A=coverage | canonical rest | pose/shape-invariant body coord for locator/texture pinning |
-| **ST** | U,V→RG, A=coverage | texture UV | needs a `uv` asset block; else zeros |
+| **Pref** | XYZ, A=coverage | canonical rest, **normalised [0,1]³** | pose/shape-invariant body coord for locator/texture pinning; positive & shot-invariant (normalised by the fixed canonical bbox) |
+| **ST** | U,V→RG, A=coverage | texture UV, [0,1] | per-vertex UV, **always available**: a real `uv` asset block if present, else a deterministic **cylindrical unwrap** computed at load |
 | **CryptoObject00** | RGBA | — | Cryptomatte ranks 0,1 = (id0,cov0,id1,cov1) |
 | **CryptoObject01** | RGBA | — | Cryptomatte ranks 2,3 |
 
@@ -85,8 +85,13 @@ derivatives); **Cryptomatte** adds per-person separation.
 - **2.5D relighting** — `albedo · Σ lights·N`; point/spot falloff & shadows use P.
 - **Per-person isolation** — Cryptomatte mattes for grades / relights / holdouts.
 - **Deep holdouts (Phase 2)** — front/back-Z → `DeepFromImage` → `DeepHoldout`.
-- **Locator/texture pinning** — Pref lookup glues a point to a body location
-  across pose/frames; ST drives texture projection.
+- **Locator/texture pinning & 2.5D remapping** — the normalised Pref is a stable
+  positive body coordinate you can look up/compare across pose, frames and shots;
+  pair it with **Normal** for a surface frame (→ a per-point 4×4 of position +
+  rotation + scale, curve/Kalman-smoothed for a usable tracked locator). **ST**
+  gives a 2D surface parametrisation for projecting/reading textures and remapping
+  surface features. The cylindrical unwrap has a back seam and pole compression
+  (it is not a seam-free atlas); a baked artist `uv` asset supersedes it when present.
 - **ControlNet / video-diffusion conditioning** — Normal, Depth, ST (DensePose-like
   IUV) and per-person masks are the geometry-conditioning channels such models train
   on. Temporal stability (Phase 3) matters for the *video* case.
