@@ -102,8 +102,14 @@ struct DetectorEngine::Impl {
 DetectorEngine::DetectorEngine(const std::string& model_path, ComputeUnits units,
                                int intra_threads)
     : impl_(std::make_unique<Impl>()) {
+  // SAM 3 bakes normalization (image*2-1) into the graph; ORT_ENABLE_ALL fuses it
+  // into the patch-embed conv and drifts scores/boxes. Disable graph optimization
+  // in that mode for bit-exact outputs (detector speed is not a concern here).
+  const GraphOptimizationLevel kOptLevel =
+      std::getenv("HASTUR_DET_STRETCH") ? GraphOptimizationLevel::ORT_DISABLE_ALL
+                                        : GraphOptimizationLevel::ORT_ENABLE_ALL;
   Ort::SessionOptions so;
-  so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+  so.SetGraphOptimizationLevel(kOptLevel);
   if (intra_threads > 0) so.SetIntraOpNumThreads(intra_threads);
 
   bool used_accel = false;
@@ -132,7 +138,7 @@ DetectorEngine::DetectorEngine(const std::string& model_path, ComputeUnits units
       last_error_ = std::string(AcceleratorSubstr()) +
                     " session create failed (falling back to CPU): " + e.what();
       Ort::SessionOptions cpu_so;
-      cpu_so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+      cpu_so.SetGraphOptimizationLevel(kOptLevel);
       if (intra_threads > 0) cpu_so.SetIntraOpNumThreads(intra_threads);
       used_accel = false;
       try {
@@ -193,15 +199,28 @@ Detections DetectorEngine::Run(const float* rgb, int W, int H, float score_thres
 
   const int pw = impl_->procW, ph = impl_->procH;
 
-  // 1. Aspect-preserving letterbox of the full frame into pw×ph, centered, with
-  //    zero padding. Identical geometry to tools/bench_detector.py so the ONNX
-  //    boxes map back the same way.
-  const float scale = std::min(static_cast<float>(pw) / W,
-                               static_cast<float>(ph) / H);
-  const int nw = static_cast<int>(std::lround(W * scale));
-  const int nh = static_cast<int>(std::lround(H * scale));
-  const int pad_x = (pw - nw) / 2;
-  const int pad_y = (ph - nh) / 2;
+  // 1. Resize the full frame into pw×ph. Two geometries:
+  //    - letterbox (default): aspect-preserving, centered, zero-padded. Matches
+  //      tools/bench_detector.py (torchvision FRCNN/SSDLite exports).
+  //    - stretch (HASTUR_DET_STRETCH): independent x/y scale, no padding. SAM 3's
+  //      processor resizes to a full square with aspect distortion, so its ONNX
+  //      must be fed the same way or distant-person recall collapses.
+  const bool stretch = std::getenv("HASTUR_DET_STRETCH") != nullptr;
+  float scale_x, scale_y;
+  int nw, nh, pad_x, pad_y;
+  if (stretch) {
+    nw = pw; nh = ph; pad_x = 0; pad_y = 0;
+    scale_x = static_cast<float>(pw) / W;
+    scale_y = static_cast<float>(ph) / H;
+  } else {
+    const float scale = std::min(static_cast<float>(pw) / W,
+                                 static_cast<float>(ph) / H);
+    scale_x = scale_y = scale;
+    nw = static_cast<int>(std::lround(W * scale));
+    nh = static_cast<int>(std::lround(H * scale));
+    pad_x = (pw - nw) / 2;
+    pad_y = (ph - nh) / 2;
+  }
 
   std::vector<float> resized(static_cast<size_t>(nw) * nh * 3);
   ResampleBilinear(rgb, W, H, resized.data(), nw, nh, 3);
@@ -256,16 +275,16 @@ Detections DetectorEngine::Run(const float* rgb, int W, int H, float score_thres
   const int64_t* labels = vlabels.GetTensorData<int64_t>();
   const float* scores = vscores.GetTensorData<float>();
 
-  const float inv_scale = 1.f / scale;
+  const float inv_x = 1.f / scale_x, inv_y = 1.f / scale_y;
   for (size_t i = 0; i < n; ++i) {
     if (static_cast<int>(labels[i]) != kPersonClass) continue;
     if (scores[i] < score_thresh) continue;
     const float* b = boxes + i * 4;
     BBox box;
-    box.x0 = std::clamp((b[0] - pad_x) * inv_scale, 0.f, static_cast<float>(W));
-    box.y0 = std::clamp((b[1] - pad_y) * inv_scale, 0.f, static_cast<float>(H));
-    box.x1 = std::clamp((b[2] - pad_x) * inv_scale, 0.f, static_cast<float>(W));
-    box.y1 = std::clamp((b[3] - pad_y) * inv_scale, 0.f, static_cast<float>(H));
+    box.x0 = std::clamp((b[0] - pad_x) * inv_x, 0.f, static_cast<float>(W));
+    box.y0 = std::clamp((b[1] - pad_y) * inv_y, 0.f, static_cast<float>(H));
+    box.x1 = std::clamp((b[2] - pad_x) * inv_x, 0.f, static_cast<float>(W));
+    box.y1 = std::clamp((b[3] - pad_y) * inv_y, 0.f, static_cast<float>(H));
     box.score = scores[i];
     if (box.x1 > box.x0 && box.y1 > box.y0) out.push_back(box);
   }
