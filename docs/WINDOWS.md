@@ -63,22 +63,33 @@ private-naming trick via install-name / soname — see `OFX_LIB_BUNDLED` in CMak
 The bundle-relative model lookup in the plugins uses
 `GetModuleHandleExW`/`GetModuleFileNameA` (the Windows analogue of `dladdr`).
 
-### Runtime requirement: Visual C++ redistributable — none (static CRT, since 0.8.0)
+### Runtime requirement: Visual C++ redistributable — none (fully static CRT)
 
-The bundled ONNX Runtime is built from source with the **static** MSVC C++ runtime
-(`--enable_msvc_static_runtime`), so `onnxruntime_hastur.dll` and the provider DLLs carry
-**no external `MSVCP140.dll` / `VCRUNTIME140*.dll` dependency** (`dumpbin /dependents`
-shows only system + CUDA libs). There is **no VC++ redistributable to install**, and the
-runtime is immune to whatever VC++ version a host forces into the process.
+**Both** the plugin and the bundled ONNX Runtime link the **static** MSVC C++ runtime.
+The ORT is built from source with `--enable_msvc_static_runtime`; the plugin (`.ofx`)
+is built with `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded` (set in `CMakeLists.txt` for
+all MSVC targets). So `Sam3dBody.ofx`, `onnxruntime_hastur.dll` and the provider DLLs
+carry **no external `MSVCP140.dll` / `VCRUNTIME140*.dll` dependency** (`dumpbin
+/dependents` shows only system + CUDA libs). There is **no VC++ redistributable to
+install**, and nothing binds to whatever VC++ version a host forces into the process.
 
-> **Nuke 16.1 (was a known limitation, now fixed).** Nuke bundles its own **14.36** VC
-> runtime in its app directory, which the loader makes resident process-wide. With the
-> old *prebuilt* ORT (dynamic CRT, needs ≥ 14.40) this shadowed any current `System32`
-> redist and ORT 1.27 failed to init with `LoadLibrary` error **1114**. The static-CRT
-> build (0.8.0) has no CRT import at all, so the host's runtime version is irrelevant —
-> **no `*140.dll` renaming or Nuke hacks required.** Verified in Nuke 16.1v3: the plugin
-> loads and renders a HASTUR depth pass on CUDA. (History and the earlier per-machine
-> workaround are in [BACKLOG](BACKLOG.md).)
+> **The plugin MUST be static-CRT (fixed after 0.8.0).** Nuke ships its own **14.36**
+> `msvcp140.dll` in its app directory, which the loader makes resident process-wide. A
+> *dynamic*-CRT plugin binds to that stale 14.36 copy — but the plugin is compiled with
+> the VS 2022 **17.10+** STL (toolset 14.44), whose `std::mutex` uses the new
+> constexpr / zero-initialized representation. 14.36's `mtx_do_lock` mis-dereferences it
+> → an access violation (**0xC0000005**) on the *first* lock of the process-global
+> FrameCache mutex, before any inference — i.e. the plugin loaded but **crashed on the
+> first real render**. (Linux/macOS have no `msvcp140`, so this was invisible there and
+> to AddressSanitizer.) The static CRT gives the plugin its own self-contained runtime,
+> immune to the host's version. **0.8.0 shipped a dynamic-CRT plugin and has this crash
+> on Windows; it is fixed here.** Verified on Windows 11 / Nuke 16.1v3: real multi-person
+> render on CUDA, no crash. (The separate ORT `LoadLibrary` 1114 history — the old
+> *prebuilt* dynamic-CRT ORT needing ≥ 14.40 — is in [BACKLOG](BACKLOG.md).)
+
+> **Model path uses `;` on Windows.** The `modelDir` param / `$HASTUR_MODEL_DIR` search
+> path is `;`-separated on Windows (POSIX uses `:`), so a drive-lettered directory like
+> `F:/hastur-models` is not split at its colon.
 
 ## Runtime requirement: cuDNN 9 (host-provided)
 
