@@ -82,14 +82,23 @@ float RotAngleDiff(const Mat3& A, const Mat3& B) {
   return std::acos(c);
 }
 
-// Split a colon-separated search path into existing directories, then append
-// $HASTUR_MODEL_DIR (also colon-separated) so an env override always applies.
+// Path-list separator: ';' on Windows so a drive-lettered dir like "F:/models"
+// is NOT split at its colon (which left person_detector.onnx unfound -> silent
+// passthrough); ':' on POSIX. Must match ModelSearchPath's join separator.
+#ifdef _WIN32
+constexpr char kPathListSep = ';';
+#else
+constexpr char kPathListSep = ':';
+#endif
+
+// Split a separator-delimited search path into existing directories, then append
+// $HASTUR_MODEL_DIR (also separated) so an env override always applies.
 std::vector<std::string> SearchDirs(const std::string& model_dir) {
   std::vector<std::string> dirs;
   auto push_split = [&](const std::string& s) {
     size_t i = 0;
     while (i <= s.size()) {
-      size_t j = s.find(':', i);
+      size_t j = s.find(kPathListSep, i);
       if (j == std::string::npos) j = s.size();
       if (j > i) dirs.emplace_back(s.substr(i, j - i));
       i = j + 1;

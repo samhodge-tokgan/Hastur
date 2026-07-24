@@ -182,7 +182,15 @@ std::string ModelSearchPath(const std::string& param_dir) {
   std::string path = param_dir;
   std::string res = BundleResourceDir();
   if (!res.empty()) {
-    if (!path.empty()) path += ':';
+    // ';' on Windows so a drive-lettered dir ("F:/models") isn't split at its
+    // colon by SearchDirs; ':' on POSIX. Must match SearchDirs' kPathListSep.
+    if (!path.empty()) {
+#ifdef _WIN32
+      path += ';';
+#else
+      path += ':';
+#endif
+    }
     path += res;
   }
   return path;
