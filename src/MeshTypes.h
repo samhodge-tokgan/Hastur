@@ -56,6 +56,15 @@ inline constexpr std::array<float, 3> kImageNetStd {0.229f, 0.224f, 0.225f};
 // ---------------------------------------------------------------------------
 enum class ComputeUnits { All, CpuAndGpu, CpuAndAne, CpuOnly };
 
+// Source of the per-person Cryptomatte coverage matte.
+//   Mesh     — the MHR mesh silhouette (rasterised beauty alpha). Classic, always
+//              available; a clay-body silhouette (no hair/garment/motion-blur edge).
+//   Sam3Mask — the SAM 3 instance mask (matte-quality: hair/fingers/motion blur,
+//              tight silhouettes). Requires a detector ONNX that also emits masks;
+//              falls back to Mesh per-person when a mask is unavailable.
+//   Both     — per-pixel union (max) of the two, so the fuller silhouette wins.
+enum class CryptoCoverage { Mesh, Sam3Mask, Both };
+
 // ---------------------------------------------------------------------------
 // Detector stage: full-frame RGB -> person boxes.
 // ---------------------------------------------------------------------------

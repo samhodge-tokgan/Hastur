@@ -64,6 +64,12 @@ struct PipelineParams {
   // requested, since it adds per-person data buffers + a second resolve pass.
   bool emit_aovs = false;
   int crypto_levels = 2;               // Cryptomatte rank layers (2 ranks each)
+
+  // Source of each person's Cryptomatte coverage matte. Mesh (default) keeps the
+  // classic MHR-silhouette behaviour. Sam3Mask uses the detector's instance mask
+  // (matte-quality edges) when the detector ONNX emits one, per-person falling
+  // back to the mesh silhouette when it does not. Both = per-pixel union (max).
+  CryptoCoverage crypto_coverage = CryptoCoverage::Mesh;
   float near_z = 0.1f;                 // camera-matrix NDC near (m)
   float far_z = 100.f;                 // camera-matrix NDC far (m)
 

@@ -1,5 +1,21 @@
 cmake_minimum_required(VERSION 3.20)
-project(Hastur VERSION 0.8.0 LANGUAGES CXX)
+project(Hastur VERSION 0.9.0 LANGUAGES CXX)
+
+# ---------------------------------------------------------------------------
+# Windows: build every target with the STATIC CRT.
+#
+# A host (Nuke) ships its own app-local msvcp140.dll (14.36). A dynamic-CRT
+# plugin binds to THAT stale copy at load time, and the VS 2022 17.10+ STL's
+# constexpr std::mutex (zero-initialized, toolset 14.44) is ABI-incompatible
+# with 14.36's mtx_do_lock -> null deref (0xC0000005) on the first lock of the
+# process-global FrameCache mutex, before any inference. The static CRT gives the
+# plugin its own self-contained runtime, immune to the host's msvcp140 version;
+# it also matches the static-CRT ONNX Runtime we bundle. (CMP0091 NEW is the
+# default at cmake_minimum_required >= 3.15, making this property authoritative.)
+# ---------------------------------------------------------------------------
+if(MSVC)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 # ---------------------------------------------------------------------------
 # Options

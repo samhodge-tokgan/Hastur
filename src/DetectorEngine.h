@@ -16,10 +16,21 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "MeshTypes.h"  // hastur::Detections, BBox, ComputeUnits
 
 namespace hastur {
+
+// One detection's instance mask, at the model's NATIVE mask resolution (e.g.
+// SAM 3's 288x288), sigmoid probabilities in [0,1]. `data` is row-major w*h.
+// Empty (w==h==0) when the model does not emit masks. The mask covers the same
+// (stretched) full frame the detector processed, so a downstream resample
+// native->W*H maps it back to frame pixels (see Sam3dBodyPipeline).
+struct DetMask {
+  int w{}, h{};
+  std::vector<float> data;  // w*h sigmoid coverage
+};
 
 class DetectorEngine {
  public:
@@ -36,7 +47,17 @@ class DetectorEngine {
   // Runs person detection on an RGB image (interleaved, row-major, values in
   // [0,1]) of size W x H. Returns person boxes in full-frame pixels (xyxy) with
   // score >= score_thresh, sorted by descending score.
-  Detections Run(const float* rgb, int W, int H, float score_thresh = 0.5f);
+  //
+  // If `out_masks` is non-null AND the model emits an instance-mask output, it
+  // is filled with one DetMask per returned box (same order as the boxes) at the
+  // model's native mask resolution. If the model has no mask output, `out_masks`
+  // is cleared. Passing null skips all mask work (zero cost for beauty renders).
+  Detections Run(const float* rgb, int W, int H, float score_thresh = 0.5f,
+                 std::vector<DetMask>* out_masks = nullptr);
+
+  // True once the graph has been probed and found to emit an instance-mask
+  // output (valid only after the first Run()).
+  bool has_masks() const;
 
   // True if the session actually placed nodes on the platform accelerator EP.
   bool accelerator_active() const;
