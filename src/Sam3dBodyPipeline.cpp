@@ -140,6 +140,66 @@ void OverComposite(std::vector<float>& acc, const std::vector<float>& fg) {
   }
 }
 
+// Clean a native detector mask IN PLACE before it becomes Cryptomatte coverage.
+// The raw sigmoid carries background speckle, interior mottling/pepper holes, and
+// a very soft edge. Three conservative passes at native resolution:
+//   1. floor    — coverage < kFloor -> 0 (removes faint background speckle).
+//   2. hole-fill — flood-fill "outside" from the border over the NOT-solid set
+//                  (< kSolid); any not-solid pixel NOT reached is an ENCLOSED
+//                  interior hole and is raised to full. Genuine boundary
+//                  concavities (gaps between splayed fingers, hair) stay
+//                  connected to the border and are preserved — unlike a blunt
+//                  morphological close, which would round that detail off.
+//   3. edge gain — smoothstep the transition to firm the silhouette while
+//                  KEEPING a soft fractional band (Cryptomatte wants fractional
+//                  coverage, not a hard binary).
+// Skipped entirely if HASTUR_MASK_NOCLEAN is set (raw-sigmoid A/B).
+void CleanDetMask(DetMask& m) {
+  if (m.w <= 0 || m.h <= 0 ||
+      m.data.size() != static_cast<size_t>(m.w) * m.h)
+    return;
+  static const bool kNoClean = std::getenv("HASTUR_MASK_NOCLEAN") != nullptr;
+  if (kNoClean) return;
+  const int W = m.w, H = m.h;
+  const size_t N = static_cast<size_t>(W) * H;
+  float* d = m.data.data();
+  constexpr float kFloor = 0.04f;  // below this = background
+  constexpr float kSolid = 0.50f;  // "inside" threshold for hole detection
+  constexpr float kLo = 0.15f, kHi = 0.85f;  // edge-gain smoothstep band
+
+  // 1. floor
+  for (size_t i = 0; i < N; ++i)
+    if (d[i] < kFloor) d[i] = 0.f;
+
+  // 2. enclosed-hole fill via border flood-fill over the not-solid set.
+  std::vector<uint8_t> outside(N, 0);
+  std::vector<int> stack;
+  stack.reserve(N / 4 + 1);
+  auto push = [&](int x, int y) {
+    const size_t i = static_cast<size_t>(y) * W + x;
+    if (!outside[i] && d[i] < kSolid) { outside[i] = 1; stack.push_back(static_cast<int>(i)); }
+  };
+  for (int x = 0; x < W; ++x) { push(x, 0); push(x, H - 1); }
+  for (int y = 0; y < H; ++y) { push(0, y); push(W - 1, y); }
+  while (!stack.empty()) {
+    const int i = stack.back(); stack.pop_back();
+    const int x = i % W, y = i / W;
+    if (x > 0) push(x - 1, y);
+    if (x < W - 1) push(x + 1, y);
+    if (y > 0) push(x, y - 1);
+    if (y < H - 1) push(x, y + 1);
+  }
+  for (size_t i = 0; i < N; ++i)
+    if (d[i] < kSolid && !outside[i]) d[i] = 1.f;  // interior hole -> fill
+
+  // 3. mild edge gain (smoothstep), keeping a soft anti-aliased band.
+  for (size_t i = 0; i < N; ++i) {
+    float t = (d[i] - kLo) / (kHi - kLo);
+    t = std::clamp(t, 0.f, 1.f);
+    d[i] = t * t * (3.f - 2.f * t);
+  }
+}
+
 // Bilinear-upsample a native single-channel detector mask (m.w x m.h sigmoid
 // coverage) to full frame W*H, row-major. The instance mask covers the same
 // (stretched) frame the detector processed, so this is a direct resample — no
@@ -865,8 +925,10 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
       // mode is active and this person has a detector mask.
       std::vector<float> mask_cov;
       if (p.crypto_coverage != CryptoCoverage::Mesh &&
-          static_cast<size_t>(*it) < det_masks.size())
+          static_cast<size_t>(*it) < det_masks.size()) {
+        CleanDetMask(det_masks[*it]);  // floor + enclosed-hole fill + edge gain
         mask_cov = UpsampleMaskToFrame(det_masks[*it], W, H);
+      }
       const bool have_mask = mask_cov.size() == n1;
 
       // Pick the coverage matte per mode. Sam3Mask falls back to the mesh
