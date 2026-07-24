@@ -135,6 +135,10 @@ struct PersonResult {
   Mesh mesh;
   Camera cam;
   bool has_hands{false};
+  // Temporally stable identity: the same physical person keeps the same id across
+  // a sequence (drives the Cryptomatte person_NN name). -1 when unassigned
+  // (stable ids disabled or single-frame use).
+  int track_id{-1};
 };
 
 // RGBA render target (straight or premultiplied per plugin param), input-frame

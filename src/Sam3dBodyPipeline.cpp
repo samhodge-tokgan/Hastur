@@ -179,6 +179,27 @@ struct Sam3dBodyPipeline::Impl {
   bool wrist_loaded = false;
   std::array<std::array<float, 9>, 2> joint_rotation_wrist{};
 
+  // --- Temporally stable person IDs (Cryptomatte) -------------------------
+  // Persistent track table mapping a person's metric 3D position (cam_t) to a
+  // stable id across Run() calls, so the Cryptomatte name person_NN follows one
+  // physical person on a sequence instead of resetting to a per-frame ordinal.
+  // Updated every frame; reset when a new pass/sequence is detected (time jumps
+  // backward or far forward). Pruned so vanished people don't linger forever.
+  struct Track {
+    int id;
+    float cam_t[3];
+    double last_time;
+  };
+  std::vector<Track> tracks;
+  int next_track_id = 0;
+  double trk_last_time = -1e18;   // last processed host time (< -1e17 = unset)
+
+  // Assign a stable track id to each person by nearest-cam_t association against
+  // the persistent table, using the frame time to gate/reset. Returns per-person
+  // ids aligned to `people` (people order = detector score-descending).
+  std::vector<int> AssignTrackIds(const std::vector<PersonResult>& people,
+                                  double time);
+
   // Refine the gated hands of `person` in place (updates person.pred.pred and
   // person.has_hands to reflect which hands were actually merged). Returns true
   // if any hand was merged (caller re-runs the MHR mesh on the updated pred).
@@ -521,6 +542,63 @@ bool Sam3dBodyPipeline::Impl::RefineHands(PersonResult& person, const float* rgb
   return true;
 }
 
+std::vector<int> Sam3dBodyPipeline::Impl::AssignTrackIds(
+    const std::vector<PersonResult>& people, double time) {
+  std::vector<int> ids(people.size(), -1);
+  // Association gate on 3D distance (metres). It grows with the frame gap so a
+  // person briefly missed still re-links, and stays tight frame-to-frame.
+  constexpr float kGateBase = 0.7f;     // per-frame gate
+  constexpr float kGatePerGap = 0.25f;  // widen per missed frame
+  constexpr double kMaxGap = 45.0;      // frames a track may vanish, then pruned
+  constexpr double kResetGap = 90.0;    // time jump that means "new pass" -> reset
+
+  const double dt = (trk_last_time < -1e17) ? 1.0 : (time - trk_last_time);
+  if (dt < -0.5 || dt > kResetGap) {    // scrubbed backward / jumped -> new pass
+    tracks.clear();
+    next_track_id = 0;
+  }
+  const double gap = std::max(1.0, std::fabs(dt));
+  const float gate = kGateBase + kGatePerGap * static_cast<float>(gap - 1.0);
+
+  std::vector<char> used(tracks.size(), 0);
+  // Greedy nearest assignment. people is score-descending, so the most confident
+  // detections claim their tracks first.
+  for (size_t pi = 0; pi < people.size(); ++pi) {
+    const float* c = people[pi].cam.cam_t.data();
+    int best = -1;
+    float best_d = gate;
+    for (size_t ti = 0; ti < tracks.size(); ++ti) {
+      if (used[ti]) continue;
+      const float* tc = tracks[ti].cam_t;
+      const float dx = c[0] - tc[0], dy = c[1] - tc[1], dz = c[2] - tc[2];
+      const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+      if (d < best_d) { best_d = d; best = static_cast<int>(ti); }
+    }
+    if (best >= 0) {
+      used[best] = 1;
+      ids[pi] = tracks[best].id;
+      for (int k = 0; k < 3; ++k) tracks[best].cam_t[k] = c[k];
+      tracks[best].last_time = time;
+    } else {
+      Track nt;
+      nt.id = next_track_id++;
+      for (int k = 0; k < 3; ++k) nt.cam_t[k] = c[k];
+      nt.last_time = time;
+      tracks.push_back(nt);
+      used.push_back(1);
+      ids[pi] = nt.id;
+    }
+  }
+  // Prune tracks unseen for a while so the table doesn't grow without bound.
+  tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
+                              [&](const Track& t) {
+                                return time - t.last_time > kMaxGap;
+                              }),
+               tracks.end());
+  trk_last_time = time;
+  return ids;
+}
+
 FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
                                    const PipelineParams& p) {
   FrameResult result;
@@ -621,6 +699,15 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
   if (result.people.empty()) {
     last_error_ = "no person meshes produced";
     return result;
+  }
+
+  // Stable per-person Cryptomatte identity: match each person to a persistent
+  // track by nearest 3D position (cam_t) so person_NN names one physical person
+  // across the sequence. Falls back to the per-frame depth ordinal when off.
+  if (p.stable_person_ids) {
+    std::vector<int> ids = s.AssignTrackIds(result.people, p.time);
+    for (size_t i = 0; i < result.people.size() && i < ids.size(); ++i)
+      result.people[i].track_id = ids[i];
   }
 
   // --- 7. depth-ordered over-composite ------------------------------------
@@ -732,8 +819,13 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
     for (auto it = order.rbegin(); it != order.rend(); ++it) {
       RasterAov& a = person_aov[*it];
       if (a.coverage.size() != n1) continue;
+      // Prefer the stable track id (person follows across frames); fall back to
+      // the per-frame depth ordinal when stable ids are disabled/unavailable.
+      const int pid =
+          (result.people[*it].track_id >= 0) ? result.people[*it].track_id : rank;
+      ++rank;
       char nm[16];
-      std::snprintf(nm, sizeof(nm), "person_%02d", rank++);
+      std::snprintf(nm, sizeof(nm), "person_%02d", pid);
       CryptoPerson cp;
       cp.name = nm;
       cp.coverage = std::move(a.coverage);

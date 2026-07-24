@@ -568,6 +568,10 @@ bool Sam3dBodyPlugin::renderPipeline(const OFX::RenderArguments& args) {
     if (pl != kFnOfxImagePlaneColour) wantAovPlane = true;
   const bool multiPlane = !g_renderPlanes.empty();
   p.emit_aovs = (aov != kAovBeauty) || wantAovPlane;
+  // Host frame time drives the stable-person-id track table (gate/reset). Not
+  // part of the pixel-keyed compute cache below, so a held still still computes
+  // once; genuine moving frames differ in pixels and each advance the tracks.
+  p.time = args.time;
 
   const std::string key = p.model_dir + "|" + std::to_string(cu);
 

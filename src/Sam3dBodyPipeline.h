@@ -67,6 +67,15 @@ struct PipelineParams {
   float near_z = 0.1f;                 // camera-matrix NDC near (m)
   float far_z = 100.f;                 // camera-matrix NDC far (m)
 
+  // Temporally stable Cryptomatte identities. The per-frame depth ordinal makes
+  // person_NN name a different physical person from frame to frame (ID flicker on
+  // a sequence). When on, each person is matched to a persistent track by nearest
+  // 3D position (cam_t) across frames, so person_NN stays locked to one human.
+  // `time` is the host frame time, used to gate the association and reset the
+  // track table when a new sequence/pass starts. Stable on an in-order render.
+  bool stable_person_ids = true;
+  double time = 0.0;
+
   float hand_tau = 0.5f;               // hand-presence gate (M7 hook only)
   int intra_threads = 0;               // ORT intra-op threads (0 = default)
 };
