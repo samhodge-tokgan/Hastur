@@ -7,6 +7,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
+#include <iterator>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -63,6 +66,40 @@ void ResampleBilinear(const float* src, int sw, int sh, float* dst, int dw,
   }
 }
 
+// Reads a detector model's JSON sidecar for a `"resize": "stretch"` field, so a
+// square-input model (SAM 3) that needs stretch-to-square + no graph-opt is
+// handled AUTOMATICALLY — no host env var. Minimal dependency-free scan (we only
+// need one string field). Returns false if the file/field is absent.
+bool FileSaysStretch(const std::string& path) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f) return false;
+  const std::string s((std::istreambuf_iterator<char>(f)),
+                      std::istreambuf_iterator<char>());
+  const auto k = s.find("\"resize\"");
+  if (k == std::string::npos) return false;
+  const auto c = s.find(':', k);
+  if (c == std::string::npos) return false;
+  const auto q1 = s.find('"', c);
+  if (q1 == std::string::npos) return false;
+  const auto q2 = s.find('"', q1 + 1);
+  if (q2 == std::string::npos) return false;
+  return s.compare(q1 + 1, q2 - q1 - 1, "stretch") == 0;
+}
+
+// Try the model's own <name>.json first, then a <dir>/person_detector.json.
+bool SidecarWantsStretch(const std::string& model_path) {
+  std::string j = model_path;
+  const auto dot = j.rfind(".onnx");
+  if (dot != std::string::npos) {
+    j.replace(dot, 5, ".json");
+    if (FileSaysStretch(j)) return true;
+  }
+  const auto slash = model_path.find_last_of("/\\");
+  const std::string dir =
+      slash == std::string::npos ? std::string() : model_path.substr(0, slash + 1);
+  return FileSaysStretch(dir + "person_detector.json");
+}
+
 }  // namespace
 
 struct DetectorEngine::Impl {
@@ -82,6 +119,7 @@ struct DetectorEngine::Impl {
   int mask_h = 0, mask_w = 0;  // native instance-mask resolution (e.g. 288x288)
   bool outputs_resolved = false;
   bool accel_active = false;
+  bool stretch = false;  // stretch-to-square + no graph-opt (SAM 3-style models)
 
   void ResolveOutputs(const std::vector<Ort::Value>& r) {
     for (size_t i = 0; i < r.size(); ++i) {
@@ -108,12 +146,18 @@ struct DetectorEngine::Impl {
 DetectorEngine::DetectorEngine(const std::string& model_path, ComputeUnits units,
                                int intra_threads)
     : impl_(std::make_unique<Impl>()) {
+  // Stretch/no-opt mode for square-input detectors (SAM 3). Auto-detected from
+  // the model's JSON sidecar ("resize":"stretch") so hosts need NO env var;
+  // HASTUR_DET_STRETCH remains an override for scripted/debug use. Determined
+  // BEFORE session creation because it also drives the optimization level.
   // SAM 3 bakes normalization (image*2-1) into the graph; ORT_ENABLE_ALL fuses it
-  // into the patch-embed conv and drifts scores/boxes. Disable graph optimization
-  // in that mode for bit-exact outputs (detector speed is not a concern here).
+  // into the patch-embed conv and drifts scores/boxes, so stretch models disable
+  // graph optimization for bit-exact outputs (detector speed is not a concern).
+  impl_->stretch = std::getenv("HASTUR_DET_STRETCH") != nullptr ||
+                   SidecarWantsStretch(model_path);
   const GraphOptimizationLevel kOptLevel =
-      std::getenv("HASTUR_DET_STRETCH") ? GraphOptimizationLevel::ORT_DISABLE_ALL
-                                        : GraphOptimizationLevel::ORT_ENABLE_ALL;
+      impl_->stretch ? GraphOptimizationLevel::ORT_DISABLE_ALL
+                     : GraphOptimizationLevel::ORT_ENABLE_ALL;
   Ort::SessionOptions so;
   so.SetGraphOptimizationLevel(kOptLevel);
   if (intra_threads > 0) so.SetIntraOpNumThreads(intra_threads);
@@ -217,7 +261,7 @@ Detections DetectorEngine::Run(const float* rgb, int W, int H, float score_thres
   //    - stretch (HASTUR_DET_STRETCH): independent x/y scale, no padding. SAM 3's
   //      processor resizes to a full square with aspect distortion, so its ONNX
   //      must be fed the same way or distant-person recall collapses.
-  const bool stretch = std::getenv("HASTUR_DET_STRETCH") != nullptr;
+  const bool stretch = impl_->stretch;
   float scale_x, scale_y;
   int nw, nh, pad_x, pad_y;
   if (stretch) {
