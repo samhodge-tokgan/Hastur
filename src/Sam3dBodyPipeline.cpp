@@ -140,6 +140,39 @@ void OverComposite(std::vector<float>& acc, const std::vector<float>& fg) {
   }
 }
 
+// Bilinear-upsample a native single-channel detector mask (m.w x m.h sigmoid
+// coverage) to full frame W*H, row-major. The instance mask covers the same
+// (stretched) frame the detector processed, so this is a direct resample — no
+// pad/offset (SAM 3 uses stretch-to-square, HASTUR_DET_STRETCH). Returns empty
+// if the mask is absent. The soft sigmoid edge becomes anti-aliased coverage.
+std::vector<float> UpsampleMaskToFrame(const DetMask& m, int W, int H) {
+  std::vector<float> out;
+  if (m.w <= 0 || m.h <= 0 || W <= 0 || H <= 0 ||
+      m.data.size() != static_cast<size_t>(m.w) * m.h)
+    return out;
+  out.assign(static_cast<size_t>(W) * H, 0.f);
+  const float sx = m.w > 1 && W > 1 ? static_cast<float>(m.w - 1) / (W - 1) : 0.f;
+  const float sy = m.h > 1 && H > 1 ? static_cast<float>(m.h - 1) / (H - 1) : 0.f;
+  for (int y = 0; y < H; ++y) {
+    float fy = y * sy;
+    int y0 = static_cast<int>(fy);
+    int y1 = std::min(y0 + 1, m.h - 1);
+    float wy = fy - y0;
+    for (int x = 0; x < W; ++x) {
+      float fx = x * sx;
+      int x0 = static_cast<int>(fx);
+      int x1 = std::min(x0 + 1, m.w - 1);
+      float wx = fx - x0;
+      const float* r0 = m.data.data() + static_cast<size_t>(y0) * m.w;
+      const float* r1 = m.data.data() + static_cast<size_t>(y1) * m.w;
+      float top = r0[x0] * (1 - wx) + r0[x1] * wx;
+      float bot = r1[x0] * (1 - wx) + r1[x1] * wx;
+      out[static_cast<size_t>(y) * W + x] = top * (1 - wy) + bot * wy;
+    }
+  }
+  return out;
+}
+
 }  // namespace
 
 struct Sam3dBodyPipeline::Impl {
@@ -618,8 +651,16 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
       p.override_camera ? p.focal_override : 0.f);
 
   // --- Stage 1: person detection ------------------------------------------
+  // SAM 3-mask Cryptomatte coverage needs per-detection instance masks; request
+  // them only when AOVs + a mask-based coverage mode are active (zero cost else,
+  // and a no-op if the detector ONNX emits no mask output). det_masks[i] aligns
+  // 1:1 with dets[i], hence with result.people[i] below.
+  const bool want_masks =
+      p.emit_aovs && p.crypto_coverage != CryptoCoverage::Mesh;
+  std::vector<DetMask> det_masks;
   auto t0 = Clock::now();
-  Detections dets = s.det->Run(rgb, W, H, p.detector_score_thresh);
+  Detections dets = s.det->Run(rgb, W, H, p.detector_score_thresh,
+                               want_masks ? &det_masks : nullptr);
   LogStage("detector", Ms(t0, Clock::now()));
   if (dets.empty()) {
     last_error_ = "no persons detected";
@@ -818,7 +859,41 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
     int rank = 0;
     for (auto it = order.rbegin(); it != order.rend(); ++it) {
       RasterAov& a = person_aov[*it];
-      if (a.coverage.size() != n1) continue;
+      const bool have_mesh = a.coverage.size() == n1;
+
+      // SAM 3 instance mask (upsampled to frame), when a mask-based coverage
+      // mode is active and this person has a detector mask.
+      std::vector<float> mask_cov;
+      if (p.crypto_coverage != CryptoCoverage::Mesh &&
+          static_cast<size_t>(*it) < det_masks.size())
+        mask_cov = UpsampleMaskToFrame(det_masks[*it], W, H);
+      const bool have_mask = mask_cov.size() == n1;
+
+      // Pick the coverage matte per mode. Sam3Mask falls back to the mesh
+      // silhouette when a mask is missing; Both = per-pixel union (max).
+      std::vector<float> cov;
+      switch (p.crypto_coverage) {
+        case CryptoCoverage::Sam3Mask:
+          if (have_mask) cov = std::move(mask_cov);
+          else if (have_mesh) cov = std::move(a.coverage);
+          break;
+        case CryptoCoverage::Both:
+          if (have_mesh) {
+            cov = std::move(a.coverage);
+            if (have_mask)
+              for (size_t px = 0; px < n1; ++px)
+                cov[px] = std::max(cov[px], mask_cov[px]);
+          } else if (have_mask) {
+            cov = std::move(mask_cov);
+          }
+          break;
+        case CryptoCoverage::Mesh:
+        default:
+          if (have_mesh) cov = std::move(a.coverage);
+          break;
+      }
+      if (cov.size() != n1) continue;  // no usable coverage for this person
+
       // Prefer the stable track id (person follows across frames); fall back to
       // the per-frame depth ordinal when stable ids are disabled/unavailable.
       const int pid =
@@ -828,7 +903,7 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
       std::snprintf(nm, sizeof(nm), "person_%02d", pid);
       CryptoPerson cp;
       cp.name = nm;
-      cp.coverage = std::move(a.coverage);
+      cp.coverage = std::move(cov);
       cps.push_back(std::move(cp));
     }
     result.crypto = BuildCryptomatte(W, H, "person", cps, p.crypto_levels);

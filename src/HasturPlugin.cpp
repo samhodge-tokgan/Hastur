@@ -81,6 +81,10 @@
 #define kParamCamWorldToNdc "camWorldToNDC"
 #define kParamCamNdcToWorld "camNDCToWorld"
 #define kParamCryptoManifest "cryptoManifest"
+#define kParamCryptoCoverage "cryptoCoverage"
+
+// cryptoCoverage choice order — MUST match hastur::CryptoCoverage enum.
+enum { kCovMesh = 0, kCovSam3Mask = 1, kCovBoth = 2 };
 
 // outputAov choice order (index -> pass). Beauty (0) is the classic RGBA render.
 enum HasturAov {
@@ -329,6 +333,7 @@ class Sam3dBodyPlugin : public OFX::ImageEffect {
   OFX::BooleanParam* _premult = nullptr;
   OFX::BooleanParam* _compOverSrc = nullptr;
   OFX::ChoiceParam* _outputAov = nullptr;
+  OFX::ChoiceParam* _cryptoCoverage = nullptr;
   OFX::PushButtonParam* _bakeCamera = nullptr;
   OFX::StringParam* _camIntrinsics = nullptr;
   OFX::StringParam* _camWorldToNdc = nullptr;
@@ -361,6 +366,7 @@ class Sam3dBodyPlugin : public OFX::ImageEffect {
     _premult = fetchBooleanParam(kParamPremult);
     _compOverSrc = fetchBooleanParam(kParamCompOverSrc);
     _outputAov = fetchChoiceParam(kParamOutputAov);
+    _cryptoCoverage = fetchChoiceParam(kParamCryptoCoverage);
     _bakeCamera = fetchPushButtonParam(kParamBakeCamera);
     _camIntrinsics = fetchStringParam(kParamCamIntrinsics);
     _camWorldToNdc = fetchStringParam(kParamCamWorldToNdc);
@@ -568,6 +574,8 @@ bool Sam3dBodyPlugin::renderPipeline(const OFX::RenderArguments& args) {
     if (pl != kFnOfxImagePlaneColour) wantAovPlane = true;
   const bool multiPlane = !g_renderPlanes.empty();
   p.emit_aovs = (aov != kAovBeauty) || wantAovPlane;
+  int cc = 0; _cryptoCoverage->getValue(cc);
+  p.crypto_coverage = static_cast<hastur::CryptoCoverage>(cc);  // 0=Mesh 1=SAM3 2=Both
   // Host frame time drives the stable-person-id track table (gate/reset). Not
   // part of the pixel-keyed compute cache below, so a held still still computes
   // once; genuine moving frames differ in pixels and each advance the tracks.
@@ -580,16 +588,17 @@ bool Sam3dBodyPlugin::renderPipeline(const OFX::RenderArguments& args) {
   // makes the Nuke AOV gizmo (8 instances, one per plane, same input) run
   // inference ONCE, and lets a single node switch outputAov for free. The
   // per-key lock guarantees compute-once even under concurrent host rendering.
-  char sig[320];
+  char sig[340];
   std::snprintf(sig, sizeof(sig),
                 "%d|%.4f|%d|%.4f|%d|%.4f|%.4f|%d|%d|%dx%d|%016llx"
-                "|%d|%.3f,%.3f,%.3f|%.3f,%.3f,%.3f",
+                "|%d|%.3f,%.3f,%.3f|%.3f,%.3f,%.3f|%d",
                 cu, p.detector_score_thresh, p.max_people, p.grey,
                 static_cast<int>(p.override_camera), p.focal_override,
                 p.fov_override_deg, p.ssaa, static_cast<int>(p.emit_aovs), W, H,
                 static_cast<unsigned long long>(HashRgb(rgb)),
                 static_cast<int>(p.garment), p.leotard_rgb[0], p.leotard_rgb[1],
-                p.leotard_rgb[2], p.skin_rgb[0], p.skin_rgb[1], p.skin_rgb[2]);
+                p.leotard_rgb[2], p.skin_rgb[0], p.skin_rgb[1], p.skin_rgb[2],
+                static_cast<int>(p.crypto_coverage));
   const std::string fkey = key + "|" + sig;
 
   std::shared_ptr<hastur::FrameResult> frp = FrameCacheGet(fkey);
@@ -1095,6 +1104,21 @@ void Sam3dBodyFactory::describeInContext(OFX::ImageEffectDescriptor& desc,
     p->appendOption("CryptoObject01 (ranks 2,3)");
     p->appendOption("Nref (bind-pose normal)");
     p->setDefault(kAovBeauty);
+    page->addChild(*p);
+  }
+  {
+    ChoiceParamDescriptor* p = desc.defineChoiceParam(kParamCryptoCoverage);
+    p->setLabels("Crypto coverage", "Crypto cov", "Cryptomatte coverage source");
+    p->setHint("Where each person's Cryptomatte matte comes from. Mesh = the MHR "
+               "clay silhouette (always available). SAM 3 mask = the detector's "
+               "instance mask (matte-quality edges: hair, fingers, motion blur) "
+               "when the detector model emits masks, else falls back to the mesh. "
+               "Both = per-pixel union of the two. Only affects the Cryptomatte "
+               "passes.");
+    p->appendOption("Mesh silhouette");        // kCovMesh
+    p->appendOption("SAM 3 mask");             // kCovSam3Mask
+    p->appendOption("Both (union)");           // kCovBoth
+    p->setDefault(kCovMesh);
     page->addChild(*p);
   }
   {
