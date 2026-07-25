@@ -82,6 +82,17 @@ struct PipelineParams {
   bool stable_person_ids = true;
   double time = 0.0;
 
+  // External person tracks (SAM 3 video tracker etc.). When `use_external_tracks`
+  // is on, Stage 1 reads per-frame boxes + stable ids (and optional masks) from a
+  // sidecar resolved along `tracks_path` (kPathListSep-separated dirs/files, plus
+  // $HASTUR_TRACKS) INSTEAD of running the internal detector, and skips the cam_t
+  // association: person_NN == the tracker's id, so ids are stable by construction
+  // and the frame is self-contained (no in-order/stateful render needed).
+  // `time` (above) selects the frame row (matched as lround(time)). See
+  // ExternalTracks.h for the sidecar format.
+  bool use_external_tracks = false;
+  std::string tracks_path;
+
   float hand_tau = 0.5f;               // hand-presence gate (M7 hook only)
   int intra_threads = 0;               // ORT intra-op threads (0 = default)
 };

@@ -24,11 +24,13 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -45,6 +47,7 @@
 #include "CameraMatrix.h"
 #include "CameraSolver.h"
 #include "Cryptomatte.h"
+#include "ExternalTracks.h"
 #include "OrtAccel.h"
 #include "Sam3dBodyPipeline.h"
 #include "nuke/fnOfxExtensions.h"
@@ -61,6 +64,7 @@
 
 // Param names.
 #define kParamModelDir "modelDir"
+#define kParamTracksDir "tracksDir"
 #define kParamComputeUnits "computeUnits"
 #define kParamScoreThresh "scoreThresh"
 #define kParamMaxPeople "maxPeople"
@@ -329,6 +333,7 @@ class Sam3dBodyPlugin : public OFX::ImageEffect {
   OFX::Clip* _srcClip;
 
   OFX::StringParam* _modelDir = nullptr;
+  OFX::StringParam* _tracksDir = nullptr;
   OFX::ChoiceParam* _computeUnits = nullptr;
   OFX::DoubleParam* _scoreThresh = nullptr;
   OFX::IntParam* _maxPeople = nullptr;
@@ -362,6 +367,7 @@ class Sam3dBodyPlugin : public OFX::ImageEffect {
     _dstClip = fetchClip(kOfxImageEffectOutputClipName);
     _srcClip = fetchClip(kOfxImageEffectSimpleSourceClipName);
     _modelDir = fetchStringParam(kParamModelDir);
+    _tracksDir = fetchStringParam(kParamTracksDir);
     _computeUnits = fetchChoiceParam(kParamComputeUnits);
     _scoreThresh = fetchDoubleParam(kParamScoreThresh);
     _maxPeople = fetchIntParam(kParamMaxPeople);
@@ -553,6 +559,13 @@ bool Sam3dBodyPlugin::renderPipeline(const OFX::RenderArguments& args) {
   std::string paramDir;
   _modelDir->getValue(paramDir);
   p.model_dir = ModelSearchPath(paramDir);
+  // External person tracks (SAM 3 video tracker etc.): when a sidecar resolves
+  // along the param dir (or $HASTUR_TRACKS), drive boxes+ids from it and skip the
+  // internal detector/association. The param value is used verbatim (no bundle
+  // Resources fallback — tracks are shot-specific, not shipped with the plugin).
+  std::string tracksDir; _tracksDir->getValue(tracksDir);
+  p.tracks_path = tracksDir;
+  p.use_external_tracks = hastur::HasExternalTracks(p.tracks_path);
   int cu = 0; _computeUnits->getValue(cu);
   p.units = ChoiceToUnits(cu);
   double d = 0;
@@ -609,7 +622,14 @@ bool Sam3dBodyPlugin::renderPipeline(const OFX::RenderArguments& args) {
                 static_cast<int>(p.garment), p.leotard_rgb[0], p.leotard_rgb[1],
                 p.leotard_rgb[2], p.skin_rgb[0], p.skin_rgb[1], p.skin_rgb[2],
                 static_cast<int>(p.crypto_coverage));
-  const std::string fkey = key + "|" + sig;
+  std::string fkey = key + "|" + sig;
+  // The pixel-keyed sig deliberately omits p.time (a held still computes once).
+  // External tracks are NOT pixel-derived — the per-frame row + sidecar identity
+  // must key the cache, else duplicate-looking frames would collide.
+  if (p.use_external_tracks) {
+    fkey += "|xt" + std::to_string(std::lround(p.time)) + ":" +
+            std::to_string(std::hash<std::string>{}(p.tracks_path));
+  }
 
   std::shared_ptr<hastur::FrameResult> frp = FrameCacheGet(fkey);
   if (!frp) {
@@ -860,12 +880,24 @@ void Sam3dBodyPlugin::bakeCameraData(double time) {
   _camWorldToNdc->setValue(mat16(cm.world_to_ndc));
   _camNdcToWorld->setValue(mat16(cm.ndc_to_world));
 
-  int mp = 1; _maxPeople->getValue(mp);
+  // The manifest must list every person_NN that can appear on disk so a
+  // Cryptomatte decoder resolves them all. External tracks declare their id set
+  // (the "# ids" header) — use it directly, since ids are sparse/large and not a
+  // 0..maxPeople-1 range. Otherwise enumerate the per-frame ordinal range.
+  std::vector<int> ids;
+  {
+    std::string tracksDir; _tracksDir->getValue(tracksDir);
+    if (hastur::HasExternalTracks(tracksDir)) ids = hastur::ExternalTrackIds(tracksDir);
+  }
+  if (ids.empty()) {
+    int mp = 1; _maxPeople->getValue(mp);
+    for (int i = 0; i < std::max(1, mp); ++i) ids.push_back(i);
+  }
   std::string manifest = "{";
-  for (int i = 0; i < std::max(1, mp); ++i) {
+  for (size_t k = 0; k < ids.size(); ++k) {
     char nm[16];
-    std::snprintf(nm, sizeof(nm), "person_%02d", i);
-    if (i) manifest += ",";
+    std::snprintf(nm, sizeof(nm), "person_%02d", ids[k]);
+    if (k) manifest += ",";
     manifest += "\"" + std::string(nm) + "\":\"" + hastur::CryptoIdHex(nm) + "\"";
   }
   manifest += "}";
@@ -975,6 +1007,19 @@ void Sam3dBodyFactory::describeInContext(OFX::ImageEffectDescriptor& desc,
     p->setHint("Directory holding person_detector.onnx, sam3dbody_body.onnx, "
                "mhr_assets.bin, pose_corrective.onnx. Empty resolves from "
                "$HASTUR_MODEL_DIR then the bundle Contents/Resources.");
+    p->setStringType(eStringTypeDirectoryPath);
+    p->setDefault("");
+    page->addChild(*p);
+  }
+  {
+    StringParamDescriptor* p = desc.defineStringParam(kParamTracksDir);
+    p->setLabels("Person tracks", "Person tracks", "Person tracks");
+    p->setHint("Optional. Directory or file with an external person-tracks sidecar "
+               "(tracks.txt: 'frame id x0 y0 x1 y1 [mask.msk]', top-down px) from an "
+               "upstream SAM 3 video tracker. When present, boxes+stable ids drive "
+               "the MHR pose and person_NN==track id (the internal detector and cam_t "
+               "association are bypassed, so ids need no in-order/stateful render). "
+               "Empty resolves from $HASTUR_TRACKS. See docs/TRACKS.md.");
     p->setStringType(eStringTypeDirectoryPath);
     p->setDefault("");
     page->addChild(*p);
