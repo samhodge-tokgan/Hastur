@@ -36,9 +36,21 @@ and each extra pass reuses the cached `FrameResult` — only the pixel write dif
 
 Standard Psyop Cryptomatte (`MurmurHash3_32` name→float, `uint32_to_float32`
 conversion). Per-person silhouettes are ranked front-to-back with occlusion, packed
-two ranks per RGBA layer. IDs are **per-frame deterministic**: `person_00`,
-`person_01`, … by depth order (nearest first). This is single-frame correct; on a
-sequence the numbering can swap between frames — temporal ID locking is Phase 3.
+two ranks per RGBA layer.
+
+**Person identity (`person_NN`).** Three modes, in increasing temporal stability:
+- **Per-frame ordinal** (stable ids off): `person_00`, `person_01`, … by depth
+  order (nearest first). Single-frame correct; the numbering can swap frame-to-frame.
+- **cam_t association** (default, *Stable person ids* on): each person is matched to
+  a persistent track by nearest 3D position across frames, so `person_NN` follows
+  one human. Robust on mild motion but relies on an in-order render holding the
+  track table, and can still swap on fast/crossing subjects.
+- **External tracks** (*Person tracks* sidecar set): `person_NN` == the upstream
+  tracker's stable id, assigned per frame. IDs are stable **by construction** and
+  need **no in-order/stateful render** — each frame is self-contained. This is the
+  recommended path for temporally-consistent per-person mattes (e.g. seeding an
+  external edge refiner). Coverage can come from the tracker's instance masks
+  (`cryptoCoverage = SAM 3 mask`). See [TRACKS.md](TRACKS.md).
 
 **Cryptomatte needs multiple layers + metadata at once**, which shapes how each
 host consumes it:
@@ -55,9 +67,10 @@ host consumes it:
      (`outputAov = CryptoObject00`, then `01`), Shuffle them into the
      `CryptoObject00/01` channel layout, and attach the manifest with a
      `ModifyMetaData` node writing the standard `cryptomatte/<key>/…` keys (the
-     manifest string comes from the **Bake camera data** button — it is fully
-     determined by *Max people*, no render needed). Then the Cryptomatte gizmo
-     works. Fiddly; option 1 is cleaner.
+     manifest string comes from the **Bake camera data** button — it is determined
+     by *Max people*, or by the external-tracks id set when a *Person tracks*
+     sidecar is present, no render needed). Then the Cryptomatte gizmo works.
+     Fiddly; option 1 is cleaner.
 
 The scalar data AOVs (Depth/Position/Normal/Pref/ST) have no such constraint —
 they are self-contained single planes and work fine via the enum path in Nuke.

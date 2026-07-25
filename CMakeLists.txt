@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Hastur VERSION 0.9.0 LANGUAGES CXX)
+project(Hastur VERSION 0.10.0 LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
 # Windows: build every target with the STATIC CRT.
@@ -160,6 +160,12 @@ add_executable(aov_validate
   tests/aov_validate.cpp src/Cryptomatte.cpp src/CameraMatrix.cpp)
 target_include_directories(aov_validate PRIVATE src)
 
+# External-tracks sidecar parser + .msk decoder unit checks. No models/ONNX/OFX;
+# writes fixtures to a temp dir and asserts parsing/frame-keying/coordinates.
+add_executable(external_tracks_validate
+  tests/external_tracks_validate.cpp src/ExternalTracks.cpp)
+target_include_directories(external_tracks_validate PRIVATE src)
+
 # ---------------------------------------------------------------------------
 # OpenFX C++ Support library
 # ---------------------------------------------------------------------------
@@ -253,6 +259,7 @@ if(HASTUR_WITH_ONNX)
   # compiled into the plugin module and orchestrated by Sam3dBodyPipeline.
   target_sources(Sam3dBody PRIVATE
     src/DetectorEngine.cpp
+    src/ExternalTracks.cpp
     src/Sam3dBodyEngine.cpp
     src/HandRefinerEngine.cpp
     src/MhrModel.cpp
@@ -436,6 +443,7 @@ if(HASTUR_WITH_ONNX)
   add_executable(pipeline_smoke
     tools/pipeline_smoke.cpp
     src/DetectorEngine.cpp
+    src/ExternalTracks.cpp
     src/Sam3dBodyEngine.cpp
     src/HandRefinerEngine.cpp
     src/MhrModel.cpp

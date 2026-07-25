@@ -3,12 +3,17 @@
 //
 // pipeline_smoke — offline end-to-end exercise of Sam3dBodyPipeline (no OFX host).
 //
-//   pipeline_smoke <input_image> <output.png> [model_search_path]
+//   pipeline_smoke <input_image> <output.png> [model_search_path] [tracks_path]
 //
 // Loads a real photo (stb_image), runs the BODY-ONLY pipeline directly with
 // HASTUR_MODEL_DIR (or the 3rd arg) pointing at the models/assets, writes the
 // composited grey-mesh RGBA to a PNG, and prints sanity stats (alpha coverage,
 // silhouette bbox). Set HASTUR_PIPELINE_TIMING=1 for per-stage timing on stderr.
+//
+// With a 4th arg (external-tracks sidecar dir/file), the internal detector is
+// bypassed: boxes+stable ids come from the sidecar (Sam3Mask coverage, no
+// downsize), person_NN == track id. HASTUR_SMOKE_FRAME=<n> selects the frame row.
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -19,18 +24,21 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "vendor/stb_image_write.h"
 
+#include "ExternalTracks.h"
 #include "Sam3dBodyPipeline.h"
 
 int main(int argc, char** argv) {
   if (argc < 3) {
     std::fprintf(stderr,
-                 "usage: %s <input_image> <output.png> [model_search_path]\n",
+                 "usage: %s <input_image> <output.png> [model_search_path] "
+                 "[tracks_path]\n",
                  argv[0]);
     return 2;
   }
   const std::string in_path = argv[1];
   const std::string out_path = argv[2];
   const std::string model_dir = argc > 3 ? argv[3] : "";
+  const std::string tracks_path = argc > 4 ? argv[4] : "";
 
   int W = 0, H = 0, ncomp = 0;
   unsigned char* px = stbi_load(in_path.c_str(), &W, &H, &ncomp, 3);  // force RGB
@@ -44,6 +52,7 @@ int main(int argc, char** argv) {
   // always 512² regardless, so this only affects detection/warp resolution.
   int maxdim = 1280;
   if (const char* m = std::getenv("HASTUR_SMOKE_MAXDIM")) maxdim = std::atoi(m);
+  if (!tracks_path.empty()) maxdim = 0;  // external boxes are full-res: no downsize
 
   std::vector<float> rgb;
   int fw = W, fh = H;
@@ -81,6 +90,17 @@ int main(int argc, char** argv) {
   // (M8) without recompiling. Defaults keep the single-person behavior.
   if (const char* e = std::getenv("HASTUR_SMOKE_MAXPEOPLE")) p.max_people = std::atoi(e);
   if (const char* e = std::getenv("HASTUR_SMOKE_SCORE")) p.detector_score_thresh = std::atof(e);
+  // External-tracks mode: drive boxes+ids from the sidecar, Sam3Mask coverage.
+  if (!tracks_path.empty()) {
+    p.tracks_path = tracks_path;
+    p.use_external_tracks = hastur::HasExternalTracks(tracks_path);
+    p.emit_aovs = true;
+    p.crypto_coverage = hastur::CryptoCoverage::Sam3Mask;
+    if (const char* e = std::getenv("HASTUR_SMOKE_FRAME")) p.time = std::atof(e);
+    std::fprintf(stderr, "external tracks: path='%s' enabled=%d frame=%ld\n",
+                 tracks_path.c_str(), p.use_external_tracks ? 1 : 0,
+                 std::lround(p.time));
+  }
 
   hastur::Sam3dBodyPipeline pipe;
   hastur::FrameResult fr = pipe.Run(rgb.data(), fw, fh, p);

@@ -21,6 +21,7 @@
 #include "CropAffine.h"
 #include "Cryptomatte.h"
 #include "DetectorEngine.h"
+#include "ExternalTracks.h"
 #include "LeotardMask.h"
 #include "SurfaceParam.h"
 #include "HandRefinerEngine.h"
@@ -342,7 +343,10 @@ bool Sam3dBodyPipeline::EnsureLoaded(const PipelineParams& p) {
   s.intra_threads = p.intra_threads;
 
   std::string missing;
-  if (det_path.empty()) missing += " person_detector.onnx";
+  // The person detector is not needed when boxes come from external tracks; only
+  // require it for the internal detection path. (It is still loaded when present,
+  // so toggling the tracks param off within a session keeps working.)
+  if (det_path.empty() && !p.use_external_tracks) missing += " person_detector.onnx";
   if (body_path.empty()) missing += " sam3dbody_body.onnx";
   if (assets_path.empty()) missing += " mhr_assets.bin";
   if (pose_path.empty()) missing += " pose_corrective.onnx";
@@ -353,7 +357,10 @@ bool Sam3dBodyPipeline::EnsureLoaded(const PipelineParams& p) {
   }
 
   try {
-    s.det = std::make_unique<DetectorEngine>(det_path, p.units, p.intra_threads);
+    // Load the detector when its ONNX is present (skipped only when external
+    // tracks are active AND no detector model was supplied).
+    if (!det_path.empty())
+      s.det = std::make_unique<DetectorEngine>(det_path, p.units, p.intra_threads);
     s.body = std::make_unique<Sam3dBodyEngine>(body_path, p.units, p.intra_threads);
     s.assets = MeshAssets::Load(assets_path);
     s.mhr = std::make_unique<MhrModel>(s.assets);
@@ -727,17 +734,48 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
   const bool want_masks =
       p.emit_aovs && p.crypto_coverage != CryptoCoverage::Mesh;
   std::vector<DetMask> det_masks;
+  Detections dets;
+  // Pre-assigned stable ids when driving from external tracks; -1 => use the
+  // detector + cam_t association path below. Aligned 1:1 with dets/people.
+  std::vector<int> ext_ids;
   auto t0 = Clock::now();
-  Detections dets = s.det->Run(rgb, W, H, p.detector_score_thresh,
-                               want_masks ? &det_masks : nullptr);
-  LogStage("detector", Ms(t0, Clock::now()));
+  if (p.use_external_tracks) {
+    // Boxes + stable ids (and optional masks) come from the upstream tracker; the
+    // internal detector and AssignTrackIds() are bypassed entirely. Each frame is
+    // self-contained, so ordering/statefulness no longer matter.
+    std::vector<ExternalTrack> trk =
+        LoadExternalTracks(p.tracks_path, std::lround(p.time), want_masks);
+    dets.reserve(trk.size());
+    ext_ids.reserve(trk.size());
+    if (want_masks) det_masks.reserve(trk.size());
+    for (ExternalTrack& t : trk) {
+      dets.push_back(t.box);
+      ext_ids.push_back(t.id);
+      if (want_masks) det_masks.push_back(std::move(t.mask));
+    }
+    LogStage("external-tracks", Ms(t0, Clock::now()));
+  } else {
+    if (!s.det) {  // external tracks were on at load time and no detector model
+      last_error_ = "no detector loaded (set a model dir, or supply person tracks)";
+      return result;
+    }
+    dets = s.det->Run(rgb, W, H, p.detector_score_thresh,
+                      want_masks ? &det_masks : nullptr);
+    LogStage("detector", Ms(t0, Clock::now()));
+  }
   if (dets.empty()) {
-    last_error_ = "no persons detected";
+    last_error_ =
+        p.use_external_tracks ? "no tracks for this frame" : "no persons detected";
     return result;  // valid (empty) frame; host passes source through
   }
 
+  // External tracks carry their own (already de-duplicated) person set, so the
+  // per-frame max_people cap does not apply — dropping tracker people would break
+  // stable ids and the depth composite. The internal path keeps the cap.
   const int max_people = std::max(1, p.max_people);
-  const int n_people = std::min(static_cast<int>(dets.size()), max_people);
+  const int n_people = p.use_external_tracks
+                           ? static_cast<int>(dets.size())
+                           : std::min(static_cast<int>(dets.size()), max_people);
 
   RasterOptions ropt;
   ropt.grey = p.grey;
@@ -754,6 +792,10 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
     const BBox& box = dets[i];
     PersonResult person;
     person.box = box;
+    // External tracks pre-assign the stable identity (person_NN == tracker id);
+    // the cam_t association below is skipped for this path.
+    if (p.use_external_tracks && i < static_cast<int>(ext_ids.size()))
+      person.track_id = ext_ids[i];
 
     // 2. crop + camera conditioning.
     auto tc = Clock::now();
@@ -814,7 +856,9 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
   // Stable per-person Cryptomatte identity: match each person to a persistent
   // track by nearest 3D position (cam_t) so person_NN names one physical person
   // across the sequence. Falls back to the per-frame depth ordinal when off.
-  if (p.stable_person_ids) {
+  // External tracks already carry stable ids (set in the loop above); only the
+  // internal detector path needs the cam_t association.
+  if (p.stable_person_ids && !p.use_external_tracks) {
     std::vector<int> ids = s.AssignTrackIds(result.people, p.time);
     for (size_t i = 0; i < result.people.size() && i < ids.size(); ++i)
       result.people[i].track_id = ids[i];
