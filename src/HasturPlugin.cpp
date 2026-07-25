@@ -98,6 +98,7 @@ enum HasturAov {
   kAovCrypto01,
   // Appended after Crypto01 to preserve existing outputAov choice indices.
   kAovNref,
+  kAovMatte,
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -231,6 +232,7 @@ const PlaneDef kPlanes[] = {
     {kAovST, "hastur.st", "ST", {"U", "V", nullptr, nullptr}, 2},
     {kAovCrypto00, "hastur.CryptoObject00", "CryptoObject00", {"R", "G", "B", "A"}, 4},
     {kAovCrypto01, "hastur.CryptoObject01", "CryptoObject01", {"R", "G", "B", "A"}, 4},
+    {kAovMatte, "hastur.Matte", "Matte", {"A", nullptr, nullptr, nullptr}, 1},
 };
 
 // Natron/Nuke multi-plane component-string encoding for one plane.
@@ -713,6 +715,13 @@ bool Sam3dBodyPlugin::renderPipeline(const OFX::RenderArguments& args) {
         }
         break;
       }
+      case kAovMatte: {
+        // Soft foreground matte to all 4 channels (grey RGB + alpha) so it's
+        // usable as both a viewable matte and an alpha/mask input downstream.
+        const float m = px < av.matte.size() ? av.matte[px] : 0.f;
+        o[0] = o[1] = o[2] = o[3] = m;
+        break;
+      }
       default:
         break;
     }
@@ -1111,6 +1120,7 @@ void Sam3dBodyFactory::describeInContext(OFX::ImageEffectDescriptor& desc,
     p->appendOption("CryptoObject00 (ranks 0,1)");
     p->appendOption("CryptoObject01 (ranks 2,3)");
     p->appendOption("Nref (bind-pose normal)");
+    p->appendOption("Matte (soft foreground)");
     p->setDefault(kAovBeauty);
     page->addChild(*p);
   }

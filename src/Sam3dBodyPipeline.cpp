@@ -896,6 +896,7 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
     av.nref.assign(nref_available ? n1 * 3 : 0, 0.f);
     av.st.assign(st_available ? n1 * 2 : 0, 0.f);
     av.coverage.assign(n1, 0.f);
+    av.matte.assign(n1, 0.f);
 
     // Merge per-person data by nearest depth (a true cross-person z-buffer: the
     // frontmost surface at each pixel wins the point sample).
@@ -972,6 +973,10 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
       ++rank;
       char nm[16];
       std::snprintf(nm, sizeof(nm), "person_%02d", pid);
+      // Matte AOV: accumulate the per-pixel union (max) of every person's
+      // coverage before it's moved into the Cryptomatte person.
+      for (size_t px = 0; px < n1; ++px)
+        if (cov[px] > av.matte[px]) av.matte[px] = cov[px];
       CryptoPerson cp;
       cp.name = nm;
       cp.coverage = std::move(cov);

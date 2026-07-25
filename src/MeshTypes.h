@@ -188,6 +188,11 @@ struct AovBuffers {
   std::vector<float> nref;      // W*H*3
   std::vector<float> st;        // W*H*2
   std::vector<float> coverage;  // W*H
+  // Soft foreground matte: per-pixel union (max) of the per-person Cryptomatte
+  // coverages — so it follows `crypto_coverage` (the matte-quality SAM 3 mask
+  // union when Sam3Mask/Both, else the mesh silhouette). A single-channel alpha
+  // matte for downstream temporal matting (e.g. seeding an external refiner).
+  std::vector<float> matte;     // W*H
 };
 
 // Cryptomatte output (Psyop spec): per-pixel ranked (id, coverage) pairs packed
