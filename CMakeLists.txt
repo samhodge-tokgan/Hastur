@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Hastur VERSION 0.10.0 LANGUAGES CXX)
+project(Hastur VERSION 0.10.1 LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
 # Windows: build every target with the STATIC CRT.

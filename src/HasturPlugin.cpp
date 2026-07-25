@@ -249,8 +249,17 @@ std::string EncodePlane(const PlaneDef& p) {
 }
 
 const PlaneDef* PlaneForEncoded(const std::string& enc) {
+  // Exact match first (Nuke round-trips our EncodePlane string verbatim).
   for (const PlaneDef& p : kPlanes)
     if (EncodePlane(p) == enc) return &p;
+  // Natron re-encodes the requested plane with an extra _ChannelsLabel_<..>
+  // segment our EncodePlane omits, so match on the stable PlaneName id token:
+  //   NatronOfxImageComponentsPlaneName_<id>_PlaneLabel_
+  for (const PlaneDef& p : kPlanes) {
+    const std::string tok = std::string(kNatronOfxImageComponentsPlaneName) +
+                            p.id + kNatronOfxImageComponentsPlaneLabel;
+    if (enc.find(tok) != std::string::npos) return &p;
+  }
   return nullptr;
 }
 
@@ -308,6 +317,11 @@ void StashRenderPlanes(OfxPropertySetHandle inArgs) {
             kOfxStatOK &&
         v)
       g_renderPlanes.emplace_back(v);
+  }
+  if (std::getenv("HASTUR_PLANE_DEBUG")) {
+    std::fprintf(stderr, "[plane-dbg] StashRenderPlanes n=%d\n", n);
+    for (const std::string& pl : g_renderPlanes)
+      std::fprintf(stderr, "[plane-dbg]   requested plane=[%s]\n", pl.c_str());
   }
 }
 
@@ -812,8 +826,11 @@ bool Sam3dBodyPlugin::renderPipeline(const OFX::RenderArguments& args) {
     const FnOfxImageEffectPlaneSuiteV1* ps = PlaneSuite();
     const OfxPropertySuiteV1* props = PropSuite();
     for (const std::string& pl : g_renderPlanes) {
-      if (pl == kFnOfxImagePlaneColour) { writeImage(dst.get(), kAovBeauty); continue; }
+      if (pl == kFnOfxImagePlaneColour) { writeImage(dst.get(), aov); continue; }
       const PlaneDef* def = PlaneForEncoded(pl);
+      if (std::getenv("HASTUR_PLANE_DEBUG"))
+        std::fprintf(stderr, "[plane-dbg] render plane=[%s] matched=%d\n",
+                     pl.c_str(), def ? 1 : 0);
       if (!def || !ps || !props) continue;
       OfxPropertySetHandle imgProps = nullptr;
       if (ps->clipGetImagePlane(_dstClip->getHandle(), args.time, pl.c_str(),
