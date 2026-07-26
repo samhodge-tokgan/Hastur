@@ -81,10 +81,11 @@ std::string g_mpUid;
 // Planes the host asked for this render call (stashed from the render inArgs).
 std::vector<std::string> g_mpRenderPlanes;
 
-// Float ids are exact bit patterns (CryptoIdFloat), but compare with a small
-// relative epsilon so a value that survived a float32 layer round-trip matches.
+// Cryptomatte ids are exact float32 bit patterns that survive the EXR round-trip.
+// Compare exactly: a relative epsilon collapses distinct ids across the huge id
+// dynamic range, causing the manifest-less scan below to misassign persons.
 inline bool IdEquals(float a, float b) {
-  return std::fabs(a - b) <= 1e-6f * (1.0f + std::fabs(b));
+  return a == b;
 }
 
 template <class T>
@@ -241,7 +242,10 @@ bool ReadPlaneTopDown(OFX::Clip* clip, double time, const std::string& plane,
 bool MattePartitionPlugin::renderPartition(const OFX::RenderArguments& args) {
   std::unique_ptr<OFX::Image> dst(_dstClip->fetchImage(args.time));
   if (!dst.get()) return false;
-  if (dst->getPixelComponents() != OFX::ePixelComponentRGBA) return false;
+  // NB: dst may be non-RGBA on multi-plane hosts (the default plane is used only
+  // for BOUNDS here; the Colour matte is written into whichever buffer we fetch
+  // below). Do not bail on non-RGBA -- that black-frames the whole partition.
+  const bool dstIsRGBA = dst->getPixelComponents() == OFX::ePixelComponentRGBA;
   const OfxRectI b = dst->getBounds();
   const int W = b.x2 - b.x1, H = b.y2 - b.y1;
   if (W <= 0 || H <= 0) return false;
@@ -428,6 +432,37 @@ bool MattePartitionPlugin::renderPartition(const OFX::RenderArguments& args) {
     }
   };
 
+  // Write the pooled matte (grey + alpha) into a raw Colour-plane buffer fetched
+  // via the plane suite, for multi-plane hosts whose default dst plane is not
+  // RGBA. Mirrors writeCryptoRaw but emits {m,m,m,m}.
+  auto writePoolRaw = [&](void* base, const OfxRectI& tb, int rowBytes,
+                          OFX::BitDepthEnum tbd) {
+    for (int y = win.y1; y < win.y2; ++y) {
+      if (abort()) break;
+      if (y < tb.y1 || y >= tb.y2) continue;
+      const int rr = b.y2 - 1 - y;
+      char* rowp = static_cast<char*>(base) + static_cast<size_t>(y - tb.y1) * rowBytes;
+      for (int x = win.x1; x < win.x2; ++x) {
+        if (x < tb.x1 || x >= tb.x2) continue;
+        const int cc = x - b.x1;
+        float m = 0.f;
+        if (rr >= 0 && rr < H && cc >= 0 && cc < W) m = poolAt(rr, cc);
+        const size_t off = static_cast<size_t>(x - tb.x1) * 4;
+        const float o[4] = {m, m, m, m};
+        if (tbd == OFX::eBitDepthFloat) {
+          float* dp = reinterpret_cast<float*>(rowp) + off;
+          for (int c = 0; c < 4; ++c) dp[c] = o[c];
+        } else if (tbd == OFX::eBitDepthUShort) {
+          unsigned short* dp = reinterpret_cast<unsigned short*>(rowp) + off;
+          for (int c = 0; c < 4; ++c) dp[c] = ClampToDepth<unsigned short>(o[c], 65535.f);
+        } else {
+          unsigned char* dp = reinterpret_cast<unsigned char*>(rowp) + off;
+          for (int c = 0; c < 4; ++c) dp[c] = ClampToDepth<unsigned char>(o[c], 255.f);
+        }
+      }
+    }
+  };
+
   const bool multiPlane = !g_mpRenderPlanes.empty();
   if (!multiPlane) {
     writeColour(dst.get());
@@ -436,7 +471,34 @@ bool MattePartitionPlugin::renderPartition(const OFX::RenderArguments& args) {
   const FnOfxImageEffectPlaneSuiteV1* ps = hplane::PlaneSuite();
   const OfxPropertySuiteV1* props = hplane::PropSuite();
   for (const std::string& pl : g_mpRenderPlanes) {
-    if (pl == kFnOfxImagePlaneColour) { writeColour(dst.get()); continue; }
+    if (pl == kFnOfxImagePlaneColour) {
+      // Default dst is RGBA: write straight into it. Otherwise fetch the Colour
+      // plane explicitly and write the pooled matte into that raw buffer.
+      if (dstIsRGBA) { writeColour(dst.get()); continue; }
+      if (!ps || !props) continue;
+      OfxPropertySetHandle cImgProps = nullptr;
+      if (ps->clipGetImagePlane(_dstClip->getHandle(), args.time,
+                                kFnOfxImagePlaneColour, nullptr, &cImgProps) != kOfxStatOK ||
+          !cImgProps)
+        continue;
+      void* cbase = nullptr;
+      props->propGetPointer(cImgProps, kOfxImagePropData, 0, &cbase);
+      int cbnd[4] = {0, 0, 0, 0};
+      props->propGetIntN(cImgProps, kOfxImagePropBounds, 4, cbnd);
+      int cRowBytes = 0;
+      props->propGetInt(cImgProps, kOfxImagePropRowBytes, 0, &cRowBytes);
+      char* cDepthStr = nullptr;
+      props->propGetString(cImgProps, kOfxImageEffectPropPixelDepth, 0, &cDepthStr);
+      OFX::BitDepthEnum cbd = OFX::eBitDepthFloat;
+      if (cDepthStr) {
+        if (!std::strcmp(cDepthStr, kOfxBitDepthByte)) cbd = OFX::eBitDepthUByte;
+        else if (!std::strcmp(cDepthStr, kOfxBitDepthShort)) cbd = OFX::eBitDepthUShort;
+      }
+      if (!cbase) continue;
+      const OfxRectI ctb{cbnd[0], cbnd[1], cbnd[2], cbnd[3]};
+      writePoolRaw(cbase, ctb, cRowBytes, cbd);
+      continue;
+    }
     const hplane::PlaneDef* def = hplane::PlaneForEncoded(pl, kMpPlanes, kMpPlaneCount);
     if (!def || !ps || !props) continue;
     OfxPropertySetHandle imgProps = nullptr;
