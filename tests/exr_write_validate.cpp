@@ -10,7 +10,7 @@
 // via WriteCryptoExr, reads it back with tinyexr, and asserts:
 //
 //   (a) the file round-trips: dimensions, and the pooled matte lands in Color RGBA
-//   (b) the Cryptomatte channels hastur.CryptoObject00/01.{R,G,B,A} round-trip
+//   (b) the spec-compliant Cryptomatte channels person00/01.{R,G,B,A} round-trip
 //       BIT-EXACT (exact float32 ids survive the lossless ZIP codec)
 //   (c) the cryptomatte/<key>/{name,manifest,hash,conversion} attributes are present,
 //       the key == CryptoTypeKey("person"), and the manifest matches + parses (JSON)
@@ -140,8 +140,11 @@ int main() {
   bool crypto_exact = true;
   bool ids_seen = false;
   for (int L = 0; L < kLevels; ++L) {
-    char pfx[32];
-    std::snprintf(pfx, sizeof(pfx), "hastur.CryptoObject%02d", L);
+    // Spec-compliant Cryptomatte layers: "<type>NN.[RGBA]" where <type> == the
+    // "name" metadata ("person"). Nuke/Fusion match channels to `name`, so the
+    // prefix must be the typename, NOT a decorative "hastur.CryptoObject".
+    char pfx[64];
+    std::snprintf(pfx, sizeof(pfx), "person%02d", L);
     const char* comps[4] = {"R", "G", "B", "A"};
     const std::vector<float>& layer = out.layers[L];
     for (int c = 0; c < 4; ++c) {
