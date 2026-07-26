@@ -7,6 +7,7 @@
 // Exit code 0 = all pass.
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -109,6 +110,58 @@ int main() {
     check(has("\"joint_xforms\":"), "json joint_xforms");
     check(has("\"hierarchy\":{\"joint_parents\":["), "json hierarchy");
     check(has("\"joints2d\":") && has("\"pose\":"), "json joints2d+pose");
+  }
+
+  // --- SkeletonToBinary <-> SkeletonFromBinary: exact round-trip ------------
+  {
+    std::vector<int32_t> parents(kNumJoints, -1);
+    parents[1] = 0;
+    parents[2] = 1;
+    const std::vector<uint8_t> bin = SkeletonToBinary(sk, parents);
+    // Header sanity: magic "SKEL", version=1 (little-endian).
+    check(bin.size() >= 8, "binary non-empty");
+    check(bin.size() >= 4 && bin[0] == 'S' && bin[1] == 'K' && bin[2] == 'E' &&
+              bin[3] == 'L',
+          "binary magic SKEL");
+    check(bin[4] == 1 && bin[5] == 0 && bin[6] == 0 && bin[7] == 0,
+          "binary version 1 LE");
+
+    SkeletonFrame rt;
+    std::vector<int32_t> rtParents;
+    check(SkeletonFromBinary(bin, rt, rtParents), "binary round-trip decode ok");
+
+    // Frame annotations + hierarchy.
+    check(rt.frame == sk.frame, "bin frame");
+    check(rt.width == sk.width && rt.height == sk.height, "bin size");
+    check(rtParents.size() == parents.size(), "bin parents size");
+    bool parentsMatch = rtParents.size() == parents.size();
+    for (size_t i = 0; i < rtParents.size() && parentsMatch; ++i)
+      parentsMatch = (rtParents[i] == parents[i]);
+    check(parentsMatch, "bin parents exact");
+
+    // People + every field, bitwise-exact (all values fit float32 round-trip).
+    check(rt.people.size() == sk.people.size(), "bin people count");
+    bool peopleMatch = rt.people.size() == sk.people.size();
+    for (size_t k = 0; k < rt.people.size() && peopleMatch; ++k) {
+      const SkeletonPerson& a = sk.people[k];
+      const SkeletonPerson& b = rt.people[k];
+      peopleMatch = a.track_id == b.track_id && a.focal == b.focal &&
+                    a.center == b.center && a.cam_t == b.cam_t &&
+                    a.joints3d == b.joints3d && a.joints2d == b.joints2d &&
+                    a.joint_xforms == b.joint_xforms &&
+                    a.keypoints3d == b.keypoints3d && a.pose == b.pose;
+    }
+    check(peopleMatch, "bin people fields exact (bitwise)");
+
+    // Corrupt magic -> reader rejects.
+    std::vector<uint8_t> bad = bin;
+    bad[0] = 'X';
+    SkeletonFrame junk;
+    std::vector<int32_t> junkP;
+    check(!SkeletonFromBinary(bad, junk, junkP), "bad magic rejected");
+    // Truncation -> reader rejects (does not read past the buffer).
+    std::vector<uint8_t> trunc(bin.begin(), bin.begin() + bin.size() / 2);
+    check(!SkeletonFromBinary(trunc, junk, junkP), "truncated buffer rejected");
   }
 
   if (g_fails == 0) std::printf("skeleton_validate: all checks passed\n");
