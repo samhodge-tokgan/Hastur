@@ -306,6 +306,11 @@ if(HASTUR_WITH_ONNX)
     src/OrtSessionManager.cpp
     src/SoftwareRasterizer.cpp
     src/Sam3dBodyPipeline.cpp
+    # SAM 3 video tracker engine (Phase 5e-i): compiled into the module so it is
+    # CI-gated. Compiled-but-unused until the OFX node wires it (Phase 5e-ii). It
+    # reuses Hastur's OrtSessionManager/OrtAccel; graphs (G1..G5) are runtime assets.
+    src/Sam3TrackerEngine.cpp
+    src/Sam3MultiTracker.cpp
   )
   # Cryptomatte.cpp is compiled unconditionally (also used by the Matte Partition
   # plugin above), so it is intentionally NOT listed here.
@@ -453,6 +458,30 @@ endif()
 # CoreML is available). Built only with ONNX enabled.
 # ---------------------------------------------------------------------------
 if(HASTUR_WITH_ONNX)
+  # SAM 3 video tracker compile/link smoke (Phase 5e-i): parses the engine headers
+  # against Hastur's OrtSessionManager/OrtAccel and links the ONNX Runtime. It runs
+  # the tracker on nothing (graphs are runtime assets) — it is purely a build gate.
+  add_executable(sam3_tracker_compile
+    tests/sam3_tracker_compile.cpp
+    src/Sam3TrackerEngine.cpp
+    src/Sam3MultiTracker.cpp
+    src/OrtSessionManager.cpp
+  )
+  target_include_directories(sam3_tracker_compile PRIVATE src)
+  target_link_libraries(sam3_tracker_compile PRIVATE onnxruntime ${HASTUR_FS_LIB})
+  if(WIN32)
+    file(GLOB ORT_ALL_DLLS3 "${ORT_DIR}/lib/*.dll")
+    foreach(dll ${ORT_ALL_DLLS3})
+      add_custom_command(TARGET sam3_tracker_compile POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${dll}" "$<TARGET_FILE_DIR:sam3_tracker_compile>"
+        VERBATIM)
+    endforeach()
+  else()
+    set_target_properties(sam3_tracker_compile PROPERTIES
+      BUILD_RPATH "${ORT_DIR}/lib"
+      INSTALL_RPATH "${ORT_DIR}/lib")
+  endif()
+
   add_executable(ort_check tests/ort_check.cpp)
   target_link_libraries(ort_check PRIVATE onnxruntime ${HASTUR_FS_LIB})
   if(WIN32)
@@ -493,6 +522,10 @@ if(HASTUR_WITH_ONNX)
     src/OrtSessionManager.cpp
     src/SoftwareRasterizer.cpp
     src/Sam3dBodyPipeline.cpp
+    # SAM 3 video tracker engine — compiled here too for extra CI compile coverage
+    # (unused by the smoke harness itself; the OFX node wiring lands in Phase 5e-ii).
+    src/Sam3TrackerEngine.cpp
+    src/Sam3MultiTracker.cpp
   )
   target_include_directories(pipeline_smoke PRIVATE src tools "${eigen_SOURCE_DIR}")
   # MSVC needs _USE_MATH_DEFINES for M_PI (CameraSolver.cpp). The plugin target defines
