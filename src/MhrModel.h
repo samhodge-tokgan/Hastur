@@ -68,6 +68,12 @@ class MhrModel {
   };
   WristGate ComputeWristGate(const std::array<float, kParamDim>& pred) const;
 
+  // Static per-joint parent indices (kNumJoints; root = -1), the skeleton
+  // hierarchy for the emitted rig. Read from the `joint_parents` asset block
+  // (present in mhr_assets.bin but otherwise unused by the LBS). Empty if the
+  // asset lacks the block. Same for every frame — emit once.
+  std::vector<int32_t> JointParents() const;
+
  private:
   std::shared_ptr<const MeshAssets> a_;
 

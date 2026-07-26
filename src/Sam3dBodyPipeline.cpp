@@ -1038,4 +1038,8 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
   return result;
 }
 
+std::vector<int32_t> Sam3dBodyPipeline::JointParents() const {
+  return impl_->mhr ? impl_->mhr->JointParents() : std::vector<int32_t>{};
+}
+
 }  // namespace hastur

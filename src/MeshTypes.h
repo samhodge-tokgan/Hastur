@@ -120,6 +120,15 @@ struct Mesh {
   std::vector<float> verts;      // kNumVerts*3
   std::vector<float> joints;     // kNumJoints*3
   std::vector<float> keypoints;  // kNumKeypoints*3
+  // Posed per-joint GLOBAL transform (the rig), kNumJoints*8 as
+  // [tx,ty,tz, qx,qy,qz,qw, s] in the SAME MHR camera frame as `joints` (metres,
+  // [1,2] flip applied — the quaternion is post-multiplied by the 180°-about-X
+  // flip so orientation matches the flipped positions). Empty unless emitted
+  // (the FK computes it regardless; it is only copied out when requested). The
+  // translation equals `joints[j]`; q is unit; s is the uniform joint scale.
+  // Together with the joint hierarchy (`joint_parents`) this is a full skeleton
+  // rig, not just a point cloud. See Skeleton.h.
+  std::vector<float> joint_xforms;  // kNumJoints*8 (empty when not emitted)
   std::shared_ptr<const std::vector<int32_t>> faces;  // kNumFaces*3, shared static
 };
 

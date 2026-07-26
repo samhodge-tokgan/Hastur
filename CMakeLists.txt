@@ -166,6 +166,12 @@ add_executable(external_tracks_validate
   tests/external_tracks_validate.cpp src/ExternalTracks.cpp)
 target_include_directories(external_tracks_validate PRIVATE src)
 
+# Skeleton module (2D projection + FrameResult extraction + JSON) unit checks.
+# No models/ONNX/OFX.
+add_executable(skeleton_validate
+  tests/skeleton_validate.cpp src/Skeleton.cpp)
+target_include_directories(skeleton_validate PRIVATE src)
+
 # ---------------------------------------------------------------------------
 # OpenFX C++ Support library
 # ---------------------------------------------------------------------------
@@ -260,6 +266,7 @@ if(HASTUR_WITH_ONNX)
   target_sources(Sam3dBody PRIVATE
     src/DetectorEngine.cpp
     src/ExternalTracks.cpp
+    src/Skeleton.cpp
     src/Sam3dBodyEngine.cpp
     src/HandRefinerEngine.cpp
     src/MhrModel.cpp
@@ -444,6 +451,7 @@ if(HASTUR_WITH_ONNX)
     tools/pipeline_smoke.cpp
     src/DetectorEngine.cpp
     src/ExternalTracks.cpp
+    src/Skeleton.cpp
     src/Sam3dBodyEngine.cpp
     src/HandRefinerEngine.cpp
     src/MhrModel.cpp
