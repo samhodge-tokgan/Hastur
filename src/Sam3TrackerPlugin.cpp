@@ -637,10 +637,17 @@ bool Sam3TrackerPlugin::runPrepass(const OFX::RenderArguments& args) {
       std::vector<uint8_t> cov(static_cast<size_t>(kLR) * kLR, 0);
       for (int y = 0; y < kLR; ++y)
         for (int x = 0; x < kLR; ++x) {
-          const bool on = low[static_cast<size_t>(y) * kLR + x] > 0.f;
-          cov[static_cast<size_t>(y) * kLR + x] = on ? 255 : 0;
-          if (on) { x0 = std::min(x0, x); y0 = std::min(y0, y);
-                    x1 = std::max(x1, x); y1 = std::max(y1, y); }
+          const size_t idx = static_cast<size_t>(y) * kLR + x;
+          const float lg = low[idx];
+          // Store SOFT coverage (sigmoid of the mask logit), NOT a hard 0/255.
+          // Hastur's .msk loader reads uint8/255 -> float coverage, so soft bytes
+          // give the Cryptomatte anti-aliased, sub-pixel edges instead of hard
+          // 288-grid stair-steps (the "SAM3 overlay needs more detail" gap). The
+          // bbox still comes from the 0.5 iso-contour (logit > 0).
+          const float s = 1.f / (1.f + std::exp(-lg));
+          cov[idx] = static_cast<uint8_t>(s * 255.f + 0.5f);
+          if (lg > 0.f) { x0 = std::min(x0, x); y0 = std::min(y0, y);
+                          x1 = std::max(x1, x); y1 = std::max(y1, y); }
         }
       if (x1 < 0) continue;  // empty mask -> no row
       char rel[64];
