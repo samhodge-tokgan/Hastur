@@ -20,11 +20,11 @@ namespace {
 // captured by the Voronoi fill from the solid interior.
 constexpr float kSeedCoverageThresh = 0.5f;
 
-// Float ids are exact bit patterns (CryptoIdFloat), but compare with a small
-// relative epsilon so a value that survived a float32 layer round-trip still
-// matches its manifest id.
+// Cryptomatte ids are exact float32 bit patterns that survive the EXR round-trip
+// (partition.py matches with `r0 == TFLOAT`). Compare exactly: a relative epsilon
+// collapses distinct ids across the huge id dynamic range and misassigns persons.
 inline bool IdEquals(float a, float b) {
-  return std::fabs(a - b) <= 1e-6f * (1.0f + std::fabs(b));
+  return a == b;
 }
 
 }  // namespace
