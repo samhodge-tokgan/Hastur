@@ -26,6 +26,7 @@
 
 #include "ExternalTracks.h"
 #include "Sam3dBodyPipeline.h"
+#include "Skeleton.h"
 
 int main(int argc, char** argv) {
   if (argc < 3) {
@@ -120,6 +121,25 @@ int main(int argc, char** argv) {
                  i, pr.box.x0, pr.box.y0, pr.box.x1, pr.box.y1, pr.box.score,
                  pr.mesh.verts.size() / 3, pr.cam.cam_t[0], pr.cam.cam_t[1],
                  pr.cam.cam_t[2], pr.cam.focal, pr.has_hands ? 1 : 0);
+  }
+
+  // Optional: dump the per-person MHR skeleton (3D/2D joints + rig transforms +
+  // pose params + hierarchy) to a JSON sidecar. HASTUR_SMOKE_FRAME annotates it.
+  if (const char* sp = std::getenv("HASTUR_SMOKE_SKELETON")) {
+    int fnum = 0;
+    if (const char* fe = std::getenv("HASTUR_SMOKE_FRAME")) fnum = std::atoi(fe);
+    hastur::SkeletonFrame sk = hastur::BuildSkeletonFrame(fr, fnum, fw, fh);
+    const std::string js = hastur::SkeletonToJson(sk, pipe.JointParents());
+    if (std::FILE* f = std::fopen(sp, "wb")) {
+      std::fwrite(js.data(), 1, js.size(), f);
+      std::fclose(f);
+      std::fprintf(stderr, "skeleton: %zu people, %zu joints/person, %zu bytes -> %s\n",
+                   sk.people.size(),
+                   sk.people.empty() ? 0u : sk.people[0].joints3d.size() / 3, js.size(),
+                   sp);
+    } else {
+      std::fprintf(stderr, "skeleton: failed to open %s\n", sp);
+    }
   }
 
   // Stats: alpha coverage + silhouette bbox (alpha > 0.5).

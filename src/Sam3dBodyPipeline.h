@@ -116,6 +116,11 @@ class Sam3dBodyPipeline {
   bool ok() const;
   const std::string& last_error() const { return last_error_; }
 
+  // Static per-joint parent indices (the MHR skeleton hierarchy) from the loaded
+  // assets; empty until the first successful Run() (which loads the model). Feeds
+  // the skeleton emission (Skeleton.h). Same every frame.
+  std::vector<int32_t> JointParents() const;
+
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

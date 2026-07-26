@@ -85,11 +85,12 @@ jobs:
         run: |
           ./build/ort_check
 
-      - name: Run offline unit checks (AOV + external tracks)
+      - name: Run offline unit checks (AOV + external tracks + skeleton)
         run: |
           set -euo pipefail
           ./build/aov_validate
           ./build/external_tracks_validate
+          ./build/skeleton_validate
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v4

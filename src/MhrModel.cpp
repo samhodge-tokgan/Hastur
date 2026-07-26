@@ -530,6 +530,26 @@ Mesh MhrModel::Run(const std::array<float, kParamDim>& pred,
     mesh.joints[j * 3 + 2] = static_cast<float>(-vj[(V + j) * 3 + 2]);
   }
 
+  // --- posed per-joint GLOBAL transforms (the rig), camera frame ---
+  // glob[j] holds the model-frame (t,q,s) after FK; the joint POSITIONS above got
+  // /100 + the [1,2] flip (= a 180° rotation about X). Apply that same flip to the
+  // ORIENTATION so the rig matches the flipped positions: q_cam = qFlip . q_model.
+  // Translation reuses the already-flipped joint position; scale is frame-invariant.
+  mesh.joint_xforms.assign(static_cast<size_t>(J) * 8, 0.f);
+  const Quat qFlip{1.0, 0.0, 0.0, 0.0};  // xyzw: 180° about X = diag(1,-1,-1)
+  for (int j = 0; j < J; ++j) {
+    const Quat qc = quatNormalize(quatMul(qFlip, glob[j].q));
+    float* o = &mesh.joint_xforms[static_cast<size_t>(j) * 8];
+    o[0] = mesh.joints[j * 3 + 0];
+    o[1] = mesh.joints[j * 3 + 1];
+    o[2] = mesh.joints[j * 3 + 2];
+    o[3] = static_cast<float>(qc.x);
+    o[4] = static_cast<float>(qc.y);
+    o[5] = static_cast<float>(qc.z);
+    o[6] = static_cast<float>(qc.w);
+    o[7] = static_cast<float>(glob[j].s);
+  }
+
   mesh.faces = a_->faces();
   return mesh;
 }
@@ -589,6 +609,14 @@ MhrModel::WristGate MhrModel::ComputeWristGate(
     quatToRotmat(glob[lowarm[side]].q, g.lowarm_global[side].data());
 
   return g;
+}
+
+std::vector<int32_t> MhrModel::JointParents() const {
+  if (!a_->has("joint_parents")) return {};
+  const MeshAssets::Block& b = a_->block("joint_parents");
+  const int n = static_cast<int>(b.numel());
+  const int32_t* p = a_->i32("joint_parents");
+  return std::vector<int32_t>(p, p + n);
 }
 
 }  // namespace hastur
