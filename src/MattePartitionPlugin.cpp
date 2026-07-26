@@ -26,14 +26,18 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
 #include "ofxsImageEffect.h"
 #include "ofxsProcessing.H"
 
+#include "CryptoExr.h"
 #include "Cryptomatte.h"
 #include "MattePartition.h"
 #include "MultiPlane.h"
@@ -59,6 +63,9 @@
 #define kParamSeedThresh "seedThresh"
 #define kParamCryptoLevels "cryptoLevels"
 #define kMpParamCryptoManifest "cryptoManifest"
+#define kParamCryptoExrPath "cryptoExrPath"
+#define kParamCryptoCompression "cryptoCompression"
+#define kParamSkeletonSidecar "skeletonSidecar"
 
 // How many person_NN slots the baked candidate manifest enumerates. The input
 // scan maps IDs against this same table, so emitted names are always a subset.
@@ -160,6 +167,9 @@ class MattePartitionPlugin : public OFX::ImageEffect {
     _seedThresh = fetchDoubleParam(kParamSeedThresh);
     _cryptoLevels = fetchIntParam(kParamCryptoLevels);
     _cryptoManifest = fetchStringParam(kMpParamCryptoManifest);
+    _cryptoExrPath = fetchStringParam(kParamCryptoExrPath);
+    _cryptoCompression = fetchChoiceParam(kParamCryptoCompression);
+    _skeletonSidecar = fetchStringParam(kParamSkeletonSidecar);
   }
 
   void render(const OFX::RenderArguments& args) override;
@@ -175,6 +185,9 @@ class MattePartitionPlugin : public OFX::ImageEffect {
   OFX::DoubleParam* _seedThresh = nullptr;
   OFX::IntParam* _cryptoLevels = nullptr;
   OFX::StringParam* _cryptoManifest = nullptr;
+  OFX::StringParam* _cryptoExrPath = nullptr;
+  OFX::ChoiceParam* _cryptoCompression = nullptr;
+  OFX::StringParam* _skeletonSidecar = nullptr;
 };
 
 namespace {
@@ -234,6 +247,39 @@ bool ReadPlaneTopDown(OFX::Clip* clip, double time, const std::string& plane,
     }
   }
   return true;
+}
+
+// Expand a printf-style frame pattern (e.g. ".../crypto_%04d.exr") with the frame
+// number. If the pattern has no conversion the frame arg is harmlessly ignored.
+std::string ExpandFramePattern(const std::string& pat, long frame) {
+  if (pat.empty()) return pat;
+  const int n = std::snprintf(nullptr, 0, pat.c_str(), frame);
+  if (n < 0) return pat;  // malformed pattern -> leave as-is
+  std::vector<char> buf(static_cast<size_t>(n) + 1);
+  std::snprintf(buf.data(), buf.size(), pat.c_str(), frame);
+  return std::string(buf.data());
+}
+
+// Read a whole file into a string (empty on any failure / absence).
+std::string ReadFileToString(const std::string& path) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f) return std::string();
+  std::ostringstream ss;
+  ss << f.rdbuf();
+  return ss.str();
+}
+
+// The cryptoCompression choice options, in declared order. ALL are lossless (the
+// crypto ids must survive bit-exact); the writer enforces this by construction.
+hastur::ExrCompression CompressionForChoice(int idx) {
+  switch (idx) {
+    case 0: return hastur::ExrCompression::kZIP;
+    case 1: return hastur::ExrCompression::kZIPS;
+    case 2: return hastur::ExrCompression::kPIZ;
+    case 3: return hastur::ExrCompression::kRLE;
+    case 4: return hastur::ExrCompression::kNone;
+    default: return hastur::ExrCompression::kZIP;
+  }
 }
 
 }  // namespace
@@ -356,6 +402,40 @@ bool MattePartitionPlugin::renderPartition(const OFX::RenderArguments& args) {
   // param is wired and functional for the scan; core threading is a follow-up.
   hastur::CryptoResult out =
       hastur::PartitionCryptomatte(in_layers, ids, pool, W, H, maxDist, levels);
+
+  // (3b) Write the Cryptomatte EXR straight to disk when a path is set. This is the
+  // node's own multi-plane EXR emitter — Natron 2.5 HANGS assembling a plugin-
+  // produced multi-plane Write, so the node bypasses the host Write entirely and
+  // writes a decodable Cryptomatte EXR itself (color = pooled matte; hastur.
+  // CryptoObjectNN planes = out.layers; Psyop metadata attributes). Empty path =
+  // disabled (zero cost). Best-effort: any failure is swallowed (never fails the
+  // render). Idempotent per frame (overwrite).
+  std::string exrPat;
+  if (_cryptoExrPath) _cryptoExrPath->getValue(exrPat);
+  if (!exrPat.empty()) {
+    const long frame = std::lround(args.time);
+    const std::string exrPath = ExpandFramePattern(exrPat, frame);
+
+    // STRETCH: fold the per-frame skeleton JSON sidecar into the same EXR as the
+    // string attribute hastur/skeleton, so {matte + identity + pose} ride together.
+    std::string skelJson;
+    if (_skeletonSidecar) {
+      std::string skelDir;
+      _skeletonSidecar->getValue(skelDir);
+      if (!skelDir.empty()) {
+        char nm[32];
+        std::snprintf(nm, sizeof(nm), "skeleton_%04ld.json", frame);
+        std::string sep =
+            (skelDir.back() == '/' || skelDir.back() == '\\') ? "" : "/";
+        skelJson = ReadFileToString(skelDir + sep + nm);  // empty if absent -> skip
+      }
+    }
+
+    int comp = 0;
+    if (_cryptoCompression) _cryptoCompression->getValue(comp);
+    hastur::WriteCryptoExr(exrPath, pool, out, levels,
+                           CompressionForChoice(comp), skelJson);
+  }
 
   // (4) Emit. Multi-plane hosts request planes via g_mpRenderPlanes; satisfy each.
   // Colour -> the pooled matte (grey + alpha) so the node is viewable; the crypto
@@ -689,6 +769,50 @@ void MattePartitionFactory::describeInContext(OFX::ImageEffectDescriptor& desc,
     p->setEnabled(false);
     p->setEvaluateOnChange(false);
     p->setDefault(BuildCandidateManifest(kMpManifestPeople));
+    page->addChild(*p);
+  }
+  {
+    StringParamDescriptor* p = desc.defineStringParam(kParamCryptoExrPath);
+    p->setLabels("Cryptomatte EXR out", "Crypto EXR", "Cryptomatte EXR out");
+    p->setHint("Optional printf-style output path for the node's OWN Cryptomatte "
+               "EXR, e.g. '/renders/crypto_%04d.exr' (%0Nd is expanded with the "
+               "frame number). When set, the node writes a decodable, self-contained "
+               "Cryptomatte EXR itself — color = the pooled matte, hastur.CryptoObject "
+               "planes = the partitioned layers, plus the Psyop cryptomatte/<key>/* "
+               "metadata — bypassing the host's multi-plane Write (which HANGS on "
+               "Natron 2.5). Empty = disabled (zero cost).");
+    p->setStringType(eStringTypeFilePath);
+    p->setDefault("");
+    page->addChild(*p);
+  }
+  {
+    ChoiceParamDescriptor* p = desc.defineChoiceParam(kParamCryptoCompression);
+    p->setLabels("EXR compression", "Compression", "Cryptomatte EXR compression");
+    p->setHint("Compression for the node-written Cryptomatte EXR. All options are "
+               "LOSSLESS: Cryptomatte ids are exact float32 bit patterns and ANY "
+               "lossy codec (e.g. DWAB) corrupts them. Writing the display RGB at a "
+               "lossy DWAB while keeping the crypto lossless needs a MULTI-PART EXR "
+               "(the OpenEXR/Imf follow-up); this single-part writer keeps the whole "
+               "file lossless.");
+    p->appendOption("ZIP (default)");   // 0
+    p->appendOption("ZIPS");            // 1
+    p->appendOption("PIZ");             // 2
+    p->appendOption("RLE");             // 3
+    p->appendOption("None");            // 4
+    p->setDefault(0);
+    page->addChild(*p);
+  }
+  {
+    StringParamDescriptor* p = desc.defineStringParam(kParamSkeletonSidecar);
+    p->setLabels("Skeleton sidecar dir", "Skeleton dir", "Skeleton sidecar dir");
+    p->setHint("Optional directory holding Hastur's per-frame skeleton JSON "
+               "sidecars ('skeleton_<frame:04d>.json', written by the SAM 3D Body "
+               "node). When set alongside a Cryptomatte EXR out path, the frame's "
+               "skeleton JSON is embedded in the SAME EXR as the string attribute "
+               "'hastur/skeleton', so matte + identity + pose ride in one file. "
+               "Absent sidecar for a frame = skipped silently.");
+    p->setStringType(eStringTypeDirectoryPath);
+    p->setDefault("");
     page->addChild(*p);
   }
 }
