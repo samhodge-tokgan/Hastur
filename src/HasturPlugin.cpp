@@ -1254,6 +1254,9 @@ void getPluginIDs(OFX::PluginFactoryArray& ids) {
   // Second plugin in the same bundle: the Matte Partition node. Registering it
   // here makes OfxGetNumberOfPlugins() report 2.
   hasturreg::AppendMattePartition(ids);
+  // Third plugin: the SAM 3 Tracker node (whole-clip pre-pass -> external-tracks
+  // sidecar). Registering it here makes OfxGetNumberOfPlugins() report 3.
+  hasturreg::AppendSam3Tracker(ids);
 }
 }  // namespace Plugin
 }  // namespace OFX

@@ -282,6 +282,11 @@ target_sources(Sam3dBody PRIVATE
   src/CryptoExr.cpp
   src/TinyExrImpl.cpp
   vendor/miniz.c
+  # Third bundle plugin: the SAM 3 Tracker node (Phase 5e-ii). The OFX skeleton
+  # (describe/register/passthrough) compiles unconditionally so the bundle always
+  # exports 3 plugins; its whole-clip pre-pass (Sam3MultiTracker) is #if-gated on
+  # HASTUR_WITH_ONNX (engine sources added in the ONNX block below).
+  src/Sam3TrackerPlugin.cpp
 )
 target_include_directories(Sam3dBody PRIVATE src vendor)
 set_target_properties(Sam3dBody PROPERTIES
