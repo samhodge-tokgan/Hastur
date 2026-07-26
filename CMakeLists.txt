@@ -172,6 +172,12 @@ add_executable(skeleton_validate
   tests/skeleton_validate.cpp src/Skeleton.cpp)
 target_include_directories(skeleton_validate PRIVATE src)
 
+# Voronoi nearest-seed-label (Matte Partition core) unit checks: exact Euclidean
+# nearest-seed assignment vs brute force + the max-distance clamp. No deps.
+add_executable(voronoi_validate
+  tests/voronoi_validate.cpp src/VoronoiLabel.cpp)
+target_include_directories(voronoi_validate PRIVATE src)
+
 # ---------------------------------------------------------------------------
 # OpenFX C++ Support library
 # ---------------------------------------------------------------------------
