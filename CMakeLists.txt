@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
-project(Hastur VERSION 0.10.1 LANGUAGES CXX)
+# C is enabled for the vendored miniz (vendor/miniz.c) — the C99 DEFLATE backend
+# tinyexr uses for ZIP/ZIPS EXR compression. Everything else is C++17.
+project(Hastur VERSION 0.10.1 LANGUAGES C CXX)
 
 # ---------------------------------------------------------------------------
 # Windows: build every target with the STATIC CRT.
@@ -186,6 +188,17 @@ add_executable(matte_partition_validate
   src/MattePartition.cpp src/VoronoiLabel.cpp src/Cryptomatte.cpp)
 target_include_directories(matte_partition_validate PRIVATE src)
 
+# Cryptomatte EXR writer (Matte Partition node's own multi-plane EXR emit) unit
+# checks: partition a synthetic frame, write via WriteCryptoExr, read back with
+# tinyexr, and assert the crypto channels round-trip BIT-EXACT, the Psyop metadata
+# attributes are present + the manifest parses, and the skeleton string attribute
+# round-trips. No OFX/ONNX/GPU — uses the same vendored tinyexr + miniz as the node.
+add_executable(exr_write_validate
+  tests/exr_write_validate.cpp
+  src/CryptoExr.cpp src/TinyExrImpl.cpp vendor/miniz.c
+  src/MattePartition.cpp src/VoronoiLabel.cpp src/Cryptomatte.cpp)
+target_include_directories(exr_write_validate PRIVATE src vendor)
+
 # ---------------------------------------------------------------------------
 # OpenFX C++ Support library
 # ---------------------------------------------------------------------------
@@ -261,8 +274,16 @@ target_sources(Sam3dBody PRIVATE
   src/MattePartition.cpp
   src/VoronoiLabel.cpp
   src/Cryptomatte.cpp
+  # The node writes its OWN decodable Cryptomatte EXR (color + hastur.CryptoObject
+  # planes + Psyop metadata) straight to disk, so it never relies on the host's
+  # multi-plane Write (Natron 2.5 hangs assembling one). Vendored tinyexr (BSD-3) +
+  # miniz (public domain) provide the EXR/DEFLATE; header-only cross-OS, no runtime
+  # deps to bundle. miniz.c is C, compiled as a sibling TU.
+  src/CryptoExr.cpp
+  src/TinyExrImpl.cpp
+  vendor/miniz.c
 )
-target_include_directories(Sam3dBody PRIVATE src)
+target_include_directories(Sam3dBody PRIVATE src vendor)
 set_target_properties(Sam3dBody PROPERTIES
   PREFIX ""
   OUTPUT_NAME "Sam3dBody"

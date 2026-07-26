@@ -50,6 +50,17 @@ OpenFX SDK / C++ Support library                          — BSD-3-Clause
 
 stb_image / stb_image_write  (Sean Barrett)              — Public Domain / MIT
     tools/vendor/stb_image*.h (offline smoke-test image I/O only; not in the plugin).
+
+tinyexr  (Syoyo Fujita and contributors)                 — BSD-3-Clause
+    vendor/tinyexr.h (+ src/TinyExrImpl.cpp). Single-header OpenEXR reader/writer.
+    The Matte Partition node uses it to write its own decodable multi-plane
+    Cryptomatte EXR to disk (bypassing the host's multi-plane Write). Compiled INTO
+    the plugin. Also bundles a small amount of OpenEXR reference code (© 2002
+    Industrial Light & Magic, BSD-3-Clause) as noted in the header.
+
+miniz  (Rich Geldreich and contributors)                 — Public Domain (Unlicense)
+    vendor/miniz.{h,c}. zlib-subset DEFLATE used by tinyexr for ZIP/ZIPS EXR
+    compression. Compiled INTO the plugin.
 --------------------------------------------------------------------------------
 
 Hastur ships NO model weights. The ONNX graphs and asset blobs are generated
