@@ -46,10 +46,18 @@ bool WriteCryptoExr(const std::string& path, const std::vector<float>& pool,
   if (nLevels > static_cast<int>(crypto.layers.size()))
     nLevels = static_cast<int>(crypto.layers.size());
 
+  // The Cryptomatte typename. The spec REQUIRES the numbered crypto channel-layers
+  // to be prefixed with this exact string ("<type>00", "<type>01"), and it must
+  // equal the "cryptomatte/<key>/name" metadata below — Nuke/Fusion's Cryptomatte
+  // node reads `name`, then looks for layers `<name>NN`. A mismatch (e.g. channels
+  // "hastur.CryptoObject00" with name "person") makes the node find nothing = the
+  // matte reads as useless in Nuke. So derive the prefix from `type`, not a literal.
+  const std::string type = crypto.type_name.empty() ? std::string("person")
+                                                    : crypto.type_name;
+
   // --- Build the channel list --------------------------------------------------
-  // Color R,G,B,A = pooled matte (m,m,m,m); then per level the four packed crypto
-  // channels. Channel names are the exact EXR-layer tokens ("hastur.CryptoObject00.R")
-  // so a compositor reads them back as the hastur.CryptoObjectNN layers.
+  // Color R,G,B,A = pooled matte (m,m,m,m) — the beauty/preview; then per level the
+  // four packed crypto channels named "<type>NN.[RGBA]" (spec-compliant layers).
   std::vector<Chan> chans;
   chans.reserve(4 + static_cast<size_t>(nLevels) * 4);
 
@@ -64,8 +72,8 @@ bool WriteCryptoExr(const std::string& path, const std::vector<float>& pool,
   }
   for (int L = 0; L < nLevels; ++L) {
     const std::vector<float>& layer = crypto.layers[L];
-    char pfx[32];
-    std::snprintf(pfx, sizeof(pfx), "hastur.CryptoObject%02d", L);
+    char pfx[80];
+    std::snprintf(pfx, sizeof(pfx), "%s%02d", type.c_str(), L);
     for (int c = 0; c < 4; ++c) {
       Chan ch;
       ch.name = std::string(pfx) + "." + kRGBA[c];
@@ -130,8 +138,6 @@ bool WriteCryptoExr(const std::string& path, const std::vector<float>& pool,
     attrs.push_back(a);
   };
 
-  const std::string type = crypto.type_name.empty() ? std::string("person")
-                                                    : crypto.type_name;
   const std::string key = CryptoTypeKey(type);
   const std::string base = "cryptomatte/" + key + "/";
   addStr(base + "name", type);

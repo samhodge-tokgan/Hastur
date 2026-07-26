@@ -7,10 +7,13 @@
 // OFX / GPU here, so it is unit-testable in isolation (tests/exr_write_validate.cpp).
 //
 // LAYOUT (single-part, per the current chunk):
-//   * Color  R,G,B,A                         = the pooled matte (m,m,m,m) — beauty
-//   * hastur.CryptoObject00.{R,G,B,A}        = crypto.layers[0]  (ranks 0,1)
-//   * hastur.CryptoObject01.{R,G,B,A}        = crypto.layers[1]  (ranks 2,3)  ...
+//   * Color  R,G,B,A               = the pooled matte (m,m,m,m) — beauty/preview
+//   * <type>00.{R,G,B,A}           = crypto.layers[0]  (ranks 0,1)
+//   * <type>01.{R,G,B,A}           = crypto.layers[1]  (ranks 2,3)  ...
 //     (one Cryptomatte plane per emitted level; ids are exact float32 bit patterns)
+//     <type> == the "name" metadata below (e.g. "person") — the Cryptomatte spec
+//     REQUIRES the channel-layer prefix to equal `name`, or Nuke/Fusion find no
+//     matte. (A decorative prefix like "hastur.CryptoObject" makes it undecodable.)
 //   * float32 channels, LOSSLESS compression (ZIP default).
 //   * Cryptomatte metadata attributes (Psyop spec) so it decodes in Nuke/Fusion:
 //       cryptomatte/<key>/name       = type_name ("person")
@@ -51,7 +54,7 @@ enum class ExrCompression {
 // exist). Best-effort: returns false on any failure without throwing.
 //   pool          W*H pooled soft alpha, top-down HWC; written to Color as (m,m,m,m).
 //   crypto        the partitioned Cryptomatte: crypto.width/height set the size,
-//                 crypto.layers[i] (W*H*4) -> hastur.CryptoObjectNN.{R,G,B,A},
+//                 crypto.layers[i] (W*H*4) -> <type>NN.{R,G,B,A} (type = type_name),
 //                 crypto.manifest + crypto.type_name feed the metadata attributes.
 //   levels        number of Cryptomatte planes to emit (clamped to layers.size()).
 //   compression   file compression (lossless; default ZIP).
