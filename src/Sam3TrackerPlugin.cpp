@@ -501,12 +501,14 @@ bool Sam3TrackerPlugin::runPrepass(const OFX::RenderArguments& args) {
   const float TRK_ASSOC = hastur::kTrkAssocIou;  // 0.5
   const int PRUNE_UNMATCHED = 8;
 
-  // rec[idx] = list of (track_id, low-res 288 logits) for that frame.
+  // rec[idx] = list of (track_id, HIGH-res 1008² probability) for that frame. We store
+  // last_high (the sidecar's output mask) — last_low stays 288 and is used only for
+  // association/IoU below. Writing the 1008 mask is the matte-resolution win.
   std::vector<std::vector<std::pair<int, std::vector<float>>>> rec(N);
   auto record_frame = [&](int f) {
     for (auto& t : tracks) {
       if (!t.active || t.last_area <= 0) continue;
-      rec[f].push_back({t.id, t.last_low});
+      rec[f].push_back({t.id, t.last_high});
     }
   };
 
@@ -624,29 +626,28 @@ bool Sam3TrackerPlugin::runPrepass(const OFX::RenderArguments& args) {
   tt << "# ids"; for (int id : ids) tt << " " << id; tt << "\n";
   tt << "# frame track_id x0 y0 x1 y1 mask_relpath\n";
 
-  const float sx = static_cast<float>(plateW) / kLR;
-  const float sy = static_cast<float>(plateH) / kLR;
+  const float sx = static_cast<float>(plateW) / kIn;  // bbox mask-space (1008) -> plate px
+  const float sy = static_cast<float>(plateH) / kIn;
   long rows = 0;
   for (int f = 0; f < N; ++f) {
     const long plate = t0 + f;  // the real plate frame number (matches pipeline time)
     for (auto& pr : rec[f]) {
       const int id = pr.first;
-      const std::vector<float>& low = pr.second;
-      if (static_cast<int>(low.size()) < kLR * kLR) continue;
-      int x0 = kLR, y0 = kLR, x1 = -1, y1 = -1;
-      std::vector<uint8_t> cov(static_cast<size_t>(kLR) * kLR, 0);
-      for (int y = 0; y < kLR; ++y)
-        for (int x = 0; x < kLR; ++x) {
-          const size_t idx = static_cast<size_t>(y) * kLR + x;
-          const float lg = low[idx];
-          // Store SOFT coverage (sigmoid of the mask logit), NOT a hard 0/255.
-          // Hastur's .msk loader reads uint8/255 -> float coverage, so soft bytes
-          // give the Cryptomatte anti-aliased, sub-pixel edges instead of hard
-          // 288-grid stair-steps (the "SAM3 overlay needs more detail" gap). The
-          // bbox still comes from the 0.5 iso-contour (logit > 0).
-          const float s = 1.f / (1.f + std::exp(-lg));
-          cov[idx] = static_cast<uint8_t>(s * 255.f + 0.5f);
-          if (lg > 0.f) { x0 = std::min(x0, x); y0 = std::min(y0, y);
+      const std::vector<float>& hi = pr.second;  // HIGH-res probability [0,1], kIn²
+      if (static_cast<int>(hi.size()) < kIn * kIn) continue;
+      int x0 = kIn, y0 = kIn, x1 = -1, y1 = -1;
+      std::vector<uint8_t> cov(static_cast<size_t>(kIn) * kIn, 0);
+      for (int y = 0; y < kIn; ++y)
+        for (int x = 0; x < kIn; ++x) {
+          const size_t idx = static_cast<size_t>(y) * kIn + x;
+          // last_high is G4's pred_masks_high_res already sigmoid-ed to [0,1]. Write it
+          // as soft 0..255 coverage at the FULL 1008² (kIn) resolution — 3.5x the linear
+          // detail of the old 288 downsample, which is the real matte-resolution win.
+          // Hastur's .msk loader maps uint8/255 -> float coverage. bbox = 0.5 iso-contour.
+          float p = hi[idx];
+          if (p < 0.f) p = 0.f; else if (p > 1.f) p = 1.f;
+          cov[idx] = static_cast<uint8_t>(p * 255.f + 0.5f);
+          if (p > 0.5f) { x0 = std::min(x0, x); y0 = std::min(y0, y);
                           x1 = std::max(x1, x); y1 = std::max(y1, y); }
         }
       if (x1 < 0) continue;  // empty mask -> no row
@@ -655,7 +656,7 @@ bool Sam3TrackerPlugin::runPrepass(const OFX::RenderArguments& args) {
       std::ofstream mk(sdir / rel, std::ios::binary | std::ios::trunc);
       if (mk) {
         mk.write("MSK1", 4);
-        int32_t mw = kLR, mh = kLR;
+        int32_t mw = kIn, mh = kIn;
         mk.write(reinterpret_cast<const char*>(&mw), 4);
         mk.write(reinterpret_cast<const char*>(&mh), 4);
         mk.write(reinterpret_cast<const char*>(cov.data()),

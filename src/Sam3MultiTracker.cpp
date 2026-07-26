@@ -397,6 +397,8 @@ void Sam3MultiTracker::SeedObj(ObjState& obj, const float* seed_mask1008) {
     }
   }
   obj.last_area = area;
+  // seed HIGH-res output mask = the seed probability itself (1008*1008, [0,1]).
+  obj.last_high.assign(seed_mask1008, seed_mask1008 + (size_t)kMImgSize * kMImgSize);
 }
 
 // ---------------------------------------------------------------- propagate
@@ -494,6 +496,13 @@ const std::vector<float>& Sam3MultiTracker::PropagateObj(ObjState& obj, bool rev
   obj.max_recent = std::max(obj.max_recent, obj.recent.size());
 
   obj.last_low = low.data;
+  // HIGH-res output mask: sigmoid of G4's pred_masks_high_res (1008*1008, [0,1]).
+  // It is already computed above (fed to G5 for memory) — previously discarded. Keeping
+  // it is the matte-resolution win: the sidecar can carry 1008² instead of the 288
+  // downsample (3.5x linear), with no extra model compute.
+  obj.last_high.resize(high.data.size());
+  for (size_t i = 0; i < high.data.size(); ++i)
+    obj.last_high[i] = 1.f / (1.f + std::exp(-high.data[i]));
   long area = 0; for (float v : low.data) if (v > 0.f) ++area;
   obj.last_area = area;
   return obj.last_low;

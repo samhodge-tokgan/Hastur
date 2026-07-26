@@ -79,6 +79,11 @@ frame). It is consumed as a `DetMask` — the same path a detector instance mask
 takes (`CleanDetMask` floor + enclosed-hole fill + edge gain, then resampled to
 frame resolution) — feeding the `SAM 3 mask` / `Both` Cryptomatte coverage modes.
 
+The SAM 3 Tracker node writes the mask at the tracker's **high-resolution**
+`pred_masks_high_res` output (1008², the encoder input size) as soft `sigmoid`
+coverage — not the 288² low-res logits used internally for association. This is a
+~3.5× linear-resolution matte with only ~1.9× upscaling to a 1080p plate.
+
 ## On-disk layouts
 
 Either works; the first that resolves wins per entry:

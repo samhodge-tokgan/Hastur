@@ -101,7 +101,9 @@ class Sam3MultiTracker {
     int keep_alive = kKeepAliveMax;
     Frame cond_frame;            // single conditioning frame
     std::deque<Frame> recent;    // non-cond, pruned to <= kMMaxObjPtrs
-    std::vector<float> last_low; // last propagated low-res logits (288*288)
+    std::vector<float> last_low;  // last propagated low-res logits (288*288), for assoc
+    std::vector<float> last_high; // last propagated HIGH-res probability (1008*1008),
+                                  // sigmoid of G4's pred_masks_high_res — the OUTPUT mask
     long last_area = 0;
     size_t max_recent = 0;       // high-water mark (to prove bounding)
   };
