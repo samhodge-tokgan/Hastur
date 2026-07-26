@@ -21,6 +21,13 @@ namespace hasturreg {
 // MattePartition). Defined out-of-line to keep the two plugins in separate TUs.
 void AppendMattePartition(OFX::PluginFactoryArray& ids);
 
+// Third bundle plugin: the SAM 3 Tracker node (Phase 5e-ii). Its factory lives in
+// Sam3TrackerPlugin.cpp and is appended to the bundle's plugin list from
+// OFX::Plugin::getPluginIDs, so OfxGetNumberOfPlugins() == 3 (Sam3dBody +
+// MattePartition + Sam3Tracker). Defined out-of-line to keep the plugins in
+// separate TUs.
+void AppendSam3Tracker(OFX::PluginFactoryArray& ids);
+
 // Best-effort user messages. DaVinci Resolve's render context does not support the
 // OFX persistent-message suite (MessageSuiteV2); calling set/clearPersistentMessage
 // there THROWS, which unwinds out of the render action and the host reports the whole
