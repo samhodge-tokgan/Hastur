@@ -50,6 +50,7 @@
 #include "CameraSolver.h"
 #include "Cryptomatte.h"
 #include "ExternalTracks.h"
+#include "MultiPlane.h"
 #include "OrtAccel.h"
 #include "Sam3dBodyPipeline.h"
 #include "Skeleton.h"
@@ -216,21 +217,17 @@ hastur::ComputeUnits ChoiceToUnits(int choice) {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-plane (Foundry/Nuke + Natron) AOV output. Implemented directly against
-// the vendored fnOfxExtensions.h constants + the raw plane/property suites, so
-// the SAM-licensed plugin needs no GPL support code. See docs/AOVS.md.
+// Multi-plane (Foundry/Nuke + Natron) AOV output. The plane wire-protocol helpers
+// (PlaneDef/EncodePlane/PlaneForEncoded/PropSuite/PlaneSuite/StashRenderPlanes)
+// live in the shared MultiPlane.h so both bundle plugins drive the same code; the
+// v0.10.1 Natron token-match fallback in PlaneForEncoded is preserved there. See
+// docs/AOVS.md.
 //
 // UNVERIFIED AGAINST A HOST: the wire protocol is source-accurate but has not yet
 // been exercised in Nuke/Natron here (needs the gated models + a host). The
 // portable outputAov path (single RGBA plane) is the tested fallback.
 // ---------------------------------------------------------------------------
-struct PlaneDef {
-  int aov;                 // HasturAov
-  const char* id;          // stable unique plane id
-  const char* label;       // display label
-  const char* chans[4];    // channel names
-  int nch;                 // channel count
-};
+using hplane::PlaneDef;
 const PlaneDef kPlanes[] = {
     {kAovDepth, "hastur.depth", "Depth", {"Z", nullptr, nullptr, nullptr}, 1},
     {kAovPosition, "hastur.position", "Position", {"X", "Y", "Z", nullptr}, 3},
@@ -243,41 +240,14 @@ const PlaneDef kPlanes[] = {
     {kAovMatte, "hastur.Matte", "Matte", {"A", nullptr, nullptr, nullptr}, 1},
 };
 
-// Natron/Nuke multi-plane component-string encoding for one plane.
-std::string EncodePlane(const PlaneDef& p) {
-  std::string s = std::string(kNatronOfxImageComponentsPlaneName) + p.id +
-                  kNatronOfxImageComponentsPlaneLabel + p.label;
-  for (int i = 0; i < p.nch; ++i)
-    s += std::string(kNatronOfxImageComponentsPlaneChannel) + p.chans[i];
-  return s;
-}
-
-const PlaneDef* PlaneForEncoded(const std::string& enc) {
-  // Exact match first (Nuke round-trips our EncodePlane string verbatim).
-  for (const PlaneDef& p : kPlanes)
-    if (EncodePlane(p) == enc) return &p;
-  // Natron re-encodes the requested plane with an extra _ChannelsLabel_<..>
-  // segment our EncodePlane omits, so match on the stable PlaneName id token:
-  //   NatronOfxImageComponentsPlaneName_<id>_PlaneLabel_
-  for (const PlaneDef& p : kPlanes) {
-    const std::string tok = std::string(kNatronOfxImageComponentsPlaneName) +
-                            p.id + kNatronOfxImageComponentsPlaneLabel;
-    if (enc.find(tok) != std::string::npos) return &p;
-  }
-  return nullptr;
-}
-
-const OfxPropertySuiteV1* PropSuite() {
-  static const OfxPropertySuiteV1* s =
-      static_cast<const OfxPropertySuiteV1*>(OFX::fetchSuite(kOfxPropertySuite, 1, true));
-  return s;
-}
-const FnOfxImageEffectPlaneSuiteV1* PlaneSuite() {
-  static const FnOfxImageEffectPlaneSuiteV1* s =
-      static_cast<const FnOfxImageEffectPlaneSuiteV1*>(
-          OFX::fetchSuite(kFnOfxImageEffectPlaneSuite, 1, true));
-  return s;
-}
+// The plane wire-protocol helpers now come from MultiPlane.h (shared with the
+// Matte Partition plugin); pull them into this translation unit unqualified so the
+// original call sites below read unchanged.
+using hplane::EncodePlane;
+using hplane::PlaneForEncoded;
+using hplane::PlaneSuite;
+using hplane::PropSuite;
+using hplane::StashRenderPlanes;
 
 // Set by getPluginIDs (before any action); the delegate main entry needs it.
 std::string g_uid;
@@ -307,28 +277,6 @@ OfxStatus HasturGetClipComponents(OfxPropertySetHandle outArgs) {
   return kOfxStatOK;
 }
 
-void StashRenderPlanes(OfxPropertySetHandle inArgs) {
-  g_renderPlanes.clear();
-  const OfxPropertySuiteV1* props = PropSuite();
-  if (!props) return;
-  int n = 0;
-  if (props->propGetDimension(inArgs, kOfxImageEffectPropRenderPlanes, &n) !=
-      kOfxStatOK)
-    return;
-  for (int i = 0; i < n; ++i) {
-    char* v = nullptr;
-    if (props->propGetString(inArgs, kOfxImageEffectPropRenderPlanes, i, &v) ==
-            kOfxStatOK &&
-        v)
-      g_renderPlanes.emplace_back(v);
-  }
-  if (std::getenv("HASTUR_PLANE_DEBUG")) {
-    std::fprintf(stderr, "[plane-dbg] StashRenderPlanes n=%d\n", n);
-    for (const std::string& pl : g_renderPlanes)
-      std::fprintf(stderr, "[plane-dbg]   requested plane=[%s]\n", pl.c_str());
-  }
-}
-
 // The plugin's OFX main entry: intercept the Foundry multi-plane actions, then
 // delegate everything to the C++ Support library's dispatch (mainEntryStr).
 OfxStatus HasturMainEntry(const char* action, const void* handle,
@@ -336,7 +284,7 @@ OfxStatus HasturMainEntry(const char* action, const void* handle,
   if (std::strcmp(action, kFnOfxImageEffectActionGetClipComponents) == 0)
     return HasturGetClipComponents(outArgs);
   if (std::strcmp(action, kOfxImageEffectActionRender) == 0)
-    StashRenderPlanes(inArgs);
+    StashRenderPlanes(inArgs, g_renderPlanes);
   return OFX::Private::mainEntryStr(action, handle, inArgs, outArgs, g_uid.c_str());
 }
 
@@ -875,7 +823,7 @@ bool Sam3dBodyPlugin::renderPipeline(const OFX::RenderArguments& args) {
     const OfxPropertySuiteV1* props = PropSuite();
     for (const std::string& pl : g_renderPlanes) {
       if (pl == kFnOfxImagePlaneColour) { writeImage(dst.get(), aov); continue; }
-      const PlaneDef* def = PlaneForEncoded(pl);
+      const PlaneDef* def = PlaneForEncoded(pl, kPlanes, sizeof(kPlanes) / sizeof(kPlanes[0]));
       if (std::getenv("HASTUR_PLANE_DEBUG"))
         std::fprintf(stderr, "[plane-dbg] render plane=[%s] matched=%d\n",
                      pl.c_str(), def ? 1 : 0);
@@ -1303,6 +1251,9 @@ void getPluginIDs(OFX::PluginFactoryArray& ids) {
   g_uid = p.getUID();  // the delegating main entry passes this to mainEntryStr
 #endif
   ids.push_back(&p);
+  // Second plugin in the same bundle: the Matte Partition node. Registering it
+  // here makes OfxGetNumberOfPlugins() report 2.
+  hasturreg::AppendMattePartition(ids);
 }
 }  // namespace Plugin
 }  // namespace OFX

@@ -15,8 +15,11 @@
 
 namespace hasturreg {
 
-// TODO(stages): declare append<Name>(OFX::PluginFactoryArray&) here for any extra
-// effects that should ship in the same bundle (e.g. a mesh/overlay companion plugin).
+// Second bundle plugin: the Matte Partition node (Phase 6b-ii). Its factory lives
+// in MattePartitionPlugin.cpp and is appended to the bundle's plugin list from
+// OFX::Plugin::getPluginIDs, so OfxGetNumberOfPlugins() == 2 (Sam3dBody +
+// MattePartition). Defined out-of-line to keep the two plugins in separate TUs.
+void AppendMattePartition(OFX::PluginFactoryArray& ids);
 
 // Best-effort user messages. DaVinci Resolve's render context does not support the
 // OFX persistent-message suite (MessageSuiteV2); calling set/clearPersistentMessage

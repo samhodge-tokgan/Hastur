@@ -250,6 +250,19 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(Sam3dBody MODULE src/HasturPlugin.cpp)
 target_link_libraries(Sam3dBody PRIVATE ofxsupport ${HASTUR_FS_LIB})
+
+# Second bundle plugin: the Matte Partition node (Phase 6b-ii). It wraps the
+# PartitionCryptomatte core in a multi-plane OFX effect and is exported alongside
+# SAM 3D Body (OfxGetNumberOfPlugins == 2). Needs no ONNX — pure image processing
+# — so its sources compile into the module unconditionally. `src` on the include
+# path so the ONNX-disabled build (which skips the block below) still finds headers.
+target_sources(Sam3dBody PRIVATE
+  src/MattePartitionPlugin.cpp
+  src/MattePartition.cpp
+  src/VoronoiLabel.cpp
+  src/Cryptomatte.cpp
+)
+target_include_directories(Sam3dBody PRIVATE src)
 set_target_properties(Sam3dBody PROPERTIES
   PREFIX ""
   OUTPUT_NAME "Sam3dBody"
@@ -288,13 +301,14 @@ if(HASTUR_WITH_ONNX)
     src/CropAffine.cpp
     src/CameraSolver.cpp
     src/CameraMatrix.cpp
-    src/Cryptomatte.cpp
     src/LeotardMask.cpp
     src/SurfaceParam.cpp
     src/OrtSessionManager.cpp
     src/SoftwareRasterizer.cpp
     src/Sam3dBodyPipeline.cpp
   )
+  # Cryptomatte.cpp is compiled unconditionally (also used by the Matte Partition
+  # plugin above), so it is intentionally NOT listed here.
   # Engine headers live in src/; MhrModel needs the header-only Eigen.
   target_include_directories(Sam3dBody PRIVATE src "${eigen_SOURCE_DIR}")
   if(WIN32)
