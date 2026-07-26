@@ -6,7 +6,9 @@
 
 #include "Skeleton.h"
 
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <utility>
 #include <vector>
@@ -108,6 +110,142 @@ std::string SkeletonToJson(const SkeletonFrame& sk,
   }
   o += "]}";
   return o;
+}
+
+// --- Compact little-endian binary sidecar ----------------------------------
+namespace {
+void PutU32(std::vector<uint8_t>& b, uint32_t v) {
+  b.push_back(static_cast<uint8_t>(v & 0xFF));
+  b.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
+  b.push_back(static_cast<uint8_t>((v >> 16) & 0xFF));
+  b.push_back(static_cast<uint8_t>((v >> 24) & 0xFF));
+}
+void PutI32(std::vector<uint8_t>& b, int32_t v) {
+  PutU32(b, static_cast<uint32_t>(v));
+}
+void PutF32(std::vector<uint8_t>& b, float f) {
+  uint32_t u;
+  std::memcpy(&u, &f, 4);
+  PutU32(b, u);
+}
+void PutF32Array(std::vector<uint8_t>& b, const std::vector<float>& v, size_t n) {
+  for (size_t i = 0; i < n; ++i) PutF32(b, i < v.size() ? v[i] : 0.f);
+}
+
+// Bounds-checked little-endian readers over a byte span. `ok` latches false on
+// any short read; every getter no-ops once it is false.
+struct Reader {
+  const uint8_t* p;
+  size_t n;
+  size_t off = 0;
+  bool ok = true;
+  uint32_t u32() {
+    if (!ok || off + 4 > n) { ok = false; return 0; }
+    uint32_t v = static_cast<uint32_t>(p[off]) |
+                 (static_cast<uint32_t>(p[off + 1]) << 8) |
+                 (static_cast<uint32_t>(p[off + 2]) << 16) |
+                 (static_cast<uint32_t>(p[off + 3]) << 24);
+    off += 4;
+    return v;
+  }
+  int32_t i32() { return static_cast<int32_t>(u32()); }
+  float f32() {
+    uint32_t u = u32();
+    float f;
+    std::memcpy(&f, &u, 4);
+    return f;
+  }
+  void f32array(std::vector<float>& out, size_t count) {
+    out.assign(count, 0.f);
+    for (size_t i = 0; i < count && ok; ++i) out[i] = f32();
+  }
+};
+}  // namespace
+
+std::vector<uint8_t> SkeletonToBinary(const SkeletonFrame& sk,
+                                      const std::vector<int32_t>& parents) {
+  // Per-person strides: derived from the first person's arrays (uniform across a
+  // frame in practice), falling back to the MHR constants when there are none.
+  int32_t nj = kNumJoints, nk = kNumKeypoints, np = kParamDim;
+  if (!sk.people.empty()) {
+    const SkeletonPerson& s0 = sk.people.front();
+    nj = static_cast<int32_t>(s0.joints3d.size() / 3);
+    nk = static_cast<int32_t>(s0.keypoints3d.size() / 3);
+    np = static_cast<int32_t>(s0.pose.size());
+  }
+
+  std::vector<uint8_t> b;
+  b.reserve(64 + parents.size() * 4 +
+            sk.people.size() * static_cast<size_t>(
+                (nj * 13 + nk * 3 + np + 7) * 4 + 4));
+  b.push_back('S'); b.push_back('K'); b.push_back('E'); b.push_back('L');
+  PutU32(b, 1u);  // version
+  PutI32(b, sk.frame);
+  PutI32(b, sk.width);
+  PutI32(b, sk.height);
+  PutI32(b, nj);
+  PutI32(b, nk);
+  PutI32(b, np);
+  PutI32(b, static_cast<int32_t>(parents.size()));
+  for (int32_t v : parents) PutI32(b, v);
+  PutI32(b, static_cast<int32_t>(sk.people.size()));
+  for (const SkeletonPerson& s : sk.people) {
+    PutI32(b, s.track_id);
+    PutF32(b, s.focal);
+    PutF32(b, s.center[0]);
+    PutF32(b, s.center[1]);
+    PutF32(b, s.cam_t[0]);
+    PutF32(b, s.cam_t[1]);
+    PutF32(b, s.cam_t[2]);
+    PutF32Array(b, s.joints3d, static_cast<size_t>(nj) * 3);
+    PutF32Array(b, s.joints2d, static_cast<size_t>(nj) * 2);
+    PutF32Array(b, s.joint_xforms, static_cast<size_t>(nj) * 8);
+    PutF32Array(b, s.keypoints3d, static_cast<size_t>(nk) * 3);
+    PutF32Array(b, s.pose, static_cast<size_t>(np));
+  }
+  return b;
+}
+
+bool SkeletonFromBinary(const std::vector<uint8_t>& bytes, SkeletonFrame& sk,
+                        std::vector<int32_t>& parents) {
+  sk = SkeletonFrame{};
+  parents.clear();
+  Reader r{bytes.data(), bytes.size()};
+  if (bytes.size() < 4 || bytes[0] != 'S' || bytes[1] != 'K' || bytes[2] != 'E' ||
+      bytes[3] != 'L')
+    return false;
+  r.off = 4;
+  if (r.u32() != 1u) return false;  // version
+  sk.frame = r.i32();
+  sk.width = r.i32();
+  sk.height = r.i32();
+  const int32_t nj = r.i32();
+  const int32_t nk = r.i32();
+  const int32_t np = r.i32();
+  if (!r.ok || nj < 0 || nk < 0 || np < 0) return false;
+  const int32_t nparents = r.i32();
+  if (!r.ok || nparents < 0) return false;
+  parents.resize(static_cast<size_t>(nparents));
+  for (int32_t i = 0; i < nparents && r.ok; ++i) parents[i] = r.i32();
+  const int32_t npeople = r.i32();
+  if (!r.ok || npeople < 0) return false;
+  sk.people.resize(static_cast<size_t>(npeople));
+  for (int32_t i = 0; i < npeople && r.ok; ++i) {
+    SkeletonPerson& s = sk.people[static_cast<size_t>(i)];
+    s.track_id = r.i32();
+    s.focal = r.f32();
+    s.center[0] = r.f32();
+    s.center[1] = r.f32();
+    s.cam_t[0] = r.f32();
+    s.cam_t[1] = r.f32();
+    s.cam_t[2] = r.f32();
+    r.f32array(s.joints3d, static_cast<size_t>(nj) * 3);
+    r.f32array(s.joints2d, static_cast<size_t>(nj) * 2);
+    r.f32array(s.joint_xforms, static_cast<size_t>(nj) * 8);
+    r.f32array(s.keypoints3d, static_cast<size_t>(nk) * 3);
+    r.f32array(s.pose, static_cast<size_t>(np));
+  }
+  return r.ok;
 }
 
 }  // namespace hastur

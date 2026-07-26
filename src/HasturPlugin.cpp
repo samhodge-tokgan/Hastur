@@ -30,6 +30,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -50,6 +52,7 @@
 #include "ExternalTracks.h"
 #include "OrtAccel.h"
 #include "Sam3dBodyPipeline.h"
+#include "Skeleton.h"
 #include "nuke/fnOfxExtensions.h"
 #endif
 
@@ -65,6 +68,7 @@
 // Param names.
 #define kParamModelDir "modelDir"
 #define kParamTracksDir "tracksDir"
+#define kParamSkeletonDir "skeletonDir"
 #define kParamComputeUnits "computeUnits"
 #define kParamScoreThresh "scoreThresh"
 #define kParamMaxPeople "maxPeople"
@@ -348,6 +352,7 @@ class Sam3dBodyPlugin : public OFX::ImageEffect {
 
   OFX::StringParam* _modelDir = nullptr;
   OFX::StringParam* _tracksDir = nullptr;
+  OFX::StringParam* _skeletonDir = nullptr;
   OFX::ChoiceParam* _computeUnits = nullptr;
   OFX::DoubleParam* _scoreThresh = nullptr;
   OFX::IntParam* _maxPeople = nullptr;
@@ -382,6 +387,7 @@ class Sam3dBodyPlugin : public OFX::ImageEffect {
     _srcClip = fetchClip(kOfxImageEffectSimpleSourceClipName);
     _modelDir = fetchStringParam(kParamModelDir);
     _tracksDir = fetchStringParam(kParamTracksDir);
+    _skeletonDir = fetchStringParam(kParamSkeletonDir);
     _computeUnits = fetchChoiceParam(kParamComputeUnits);
     _scoreThresh = fetchDoubleParam(kParamScoreThresh);
     _maxPeople = fetchIntParam(kParamMaxPeople);
@@ -497,6 +503,35 @@ uint64_t HashRgb(const std::vector<float>& rgb) {
   const size_t n = rgb.size() * sizeof(float);
   for (size_t i = 0; i < n; ++i) { h ^= p[i]; h *= 1099511628211ull; }
   return h;
+}
+
+// Write the per-frame skeleton sidecar (JSON + compact binary) under `dir`,
+// named skeleton_<frame:04d>.{json,bin}. Idempotent per frame (overwrite is
+// fine). Best-effort: any I/O failure is swallowed so a bad path never fails the
+// render. Called only when the param is non-empty and people were produced.
+void WriteSkeletonSidecar(const std::string& dir, const hastur::FrameResult& fr,
+                          int W, int H, int frame,
+                          const std::vector<int32_t>& parents) {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  fs::create_directories(dir, ec);  // ok if it already exists
+  const hastur::SkeletonFrame sk = hastur::BuildSkeletonFrame(fr, frame, W, H);
+
+  char name[32];
+  std::snprintf(name, sizeof(name), "skeleton_%04d.json", frame);
+  const fs::path jsonPath = fs::path(dir) / name;
+  std::snprintf(name, sizeof(name), "skeleton_%04d.bin", frame);
+  const fs::path binPath = fs::path(dir) / name;
+
+  const std::string js = hastur::SkeletonToJson(sk, parents);
+  std::ofstream jf(jsonPath, std::ios::binary | std::ios::trunc);
+  if (jf) jf.write(js.data(), static_cast<std::streamsize>(js.size()));
+
+  const std::vector<uint8_t> bin = hastur::SkeletonToBinary(sk, parents);
+  std::ofstream bf(binPath, std::ios::binary | std::ios::trunc);
+  if (bf && !bin.empty())
+    bf.write(reinterpret_cast<const char*>(bin.data()),
+             static_cast<std::streamsize>(bin.size()));
 }
 
 // Read one interleaved pixel to normalized float (0..1 for int depths).
@@ -677,6 +712,19 @@ bool Sam3dBodyPlugin::renderPipeline(const OFX::RenderArguments& args) {
   const std::vector<float>& R = fr.render.data;  // straight RGBA, top-down
   const hastur::AovBuffers& av = fr.aovs;
   const hastur::CryptoResult& cr = fr.crypto;
+
+  // Optional per-frame skeleton sidecar. Guarded on a non-empty "Skeleton output
+  // dir" AND people present, so it never runs on the no-people / pass-through
+  // path and stays zero-cost when the param is empty. `frame = lround(time)`.
+  {
+    std::string skelDir; _skeletonDir->getValue(skelDir);
+    if (!skelDir.empty() && !fr.people.empty()) {
+      const std::vector<int32_t> parents =
+          _pipeline ? _pipeline->JointParents() : std::vector<int32_t>{};
+      WriteSkeletonSidecar(skelDir, fr, W, H,
+                           static_cast<int>(std::lround(args.time)), parents);
+    }
+  }
 
   // 4. Compose one output pixel for a given AOV. Beauty composites as before;
   // data AOVs write point-sampled values (coverage in alpha, no premult / over);
@@ -1037,6 +1085,19 @@ void Sam3dBodyFactory::describeInContext(OFX::ImageEffectDescriptor& desc,
                "the MHR pose and person_NN==track id (the internal detector and cam_t "
                "association are bypassed, so ids need no in-order/stateful render). "
                "Empty resolves from $HASTUR_TRACKS. See docs/TRACKS.md.");
+    p->setStringType(eStringTypeDirectoryPath);
+    p->setDefault("");
+    page->addChild(*p);
+  }
+  {
+    StringParamDescriptor* p = desc.defineStringParam(kParamSkeletonDir);
+    p->setLabels("Skeleton output dir", "Skeleton dir", "Skeleton output dir");
+    p->setHint("Optional. When set, Hastur writes a per-frame MHR skeleton sidecar "
+               "for each rendered frame: '<dir>/skeleton_<frame:04d>.json' "
+               "(SkeletonToJson) and '<dir>/skeleton_<frame:04d>.bin' (compact "
+               "little-endian binary). Each carries the per-person 3D/2D joints, "
+               "rig transforms, pose and the joint hierarchy, keyed by person_NN. "
+               "Empty disables emission (zero cost). See docs/SKELETON.md.");
     p->setStringType(eStringTypeDirectoryPath);
     p->setDefault("");
     page->addChild(*p);

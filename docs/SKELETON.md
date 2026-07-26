@@ -51,8 +51,55 @@ Joints behind the camera (`P.z <= 0`) are emitted as `(0,0)`. `ProjectJoints()` 
 - **JSON** — `SkeletonToJson()` emits one compact object per frame (hand-rolled; no
   JSON lib in-repo, mirroring the Cryptomatte manifest). Flat float arrays with the
   strides above.
-- (Planned) a compact binary sidecar (mirror `mhr_binfmt`) and EXR metadata
-  attributes baked like the Cryptomatte manifest.
+- **Binary** — `SkeletonToBinary()` / `SkeletonFromBinary()` emit / parse a compact,
+  dependency-free little-endian sidecar (byte style mirrors the `.msk` /
+  `mhr_binfmt` files). Same payload as the JSON, ~half the bytes and no float→text
+  round-off.
+- (Planned) EXR metadata attributes baked like the Cryptomatte manifest.
+
+## Per-frame sidecar emission (`Skeleton output dir`)
+
+The OFX plugin exposes a **`Skeleton output dir`** string param
+(`eStringTypeDirectoryPath`). When it is **non-empty** and the pipeline produced
+people, each rendered frame writes two sidecars into that directory:
+
+| file | writer | contents |
+|---|---|---|
+| `skeleton_<frame:04d>.json` | `SkeletonToJson` | one compact JSON object |
+| `skeleton_<frame:04d>.bin`  | `SkeletonToBinary` | the binary format below |
+
+`frame = lround(args.time)`; W/H come from the source; `joint_parents` from
+`Sam3dBodyPipeline::JointParents()`. Writing is idempotent per frame (overwrite is
+fine) and best-effort (a bad path never fails the render). Emission is **guarded on
+people-present**, so the pure pass-through / no-detection path never writes, and it
+is **zero-cost when the param is empty**.
+
+### Binary format (`.bin`)
+
+All fields little-endian; `float` = IEEE-754 float32. `nj` = `njoints`, `nk` =
+`nkeypts`, `nprm` = `nparams` from the header.
+
+| offset order | field | type | notes |
+|---|---|---|---|
+| 1 | magic | 4 × char | `"SKEL"` |
+| 2 | version | uint32 | `1` |
+| 3 | frame, width, height | 3 × int32 | frame annotations |
+| 4 | njoints, nkeypts, nparams | 3 × int32 | per-person array strides |
+| 5 | nparents | int32 | length of the hierarchy |
+| 6 | parents[nparents] | int32[] | joint parent indices (root = −1) |
+| 7 | npeople | int32 | people in this frame |
+| 8 | *per person* → | | repeated `npeople` times: |
+| 8a | track_id | int32 | `person_NN` (−1 = unassigned) |
+| 8b | focal, cx, cy | 3 × float | camera placement |
+| 8c | t[3] | 3 × float | `cam_t` |
+| 8d | joints3d | float[nj·3] | m, camera frame |
+| 8e | joints2d | float[nj·2] | screen px |
+| 8f | joint_xforms | float[nj·8] | `[tx,ty,tz,qx,qy,qz,qw,s]` |
+| 8g | keypoints3d | float[nk·3] | m, camera frame |
+| 8h | pose | float[nprm] | MHR param block |
+
+The reader is bounds-checked: bad magic, an unsupported version, or a truncated
+buffer all return `false`.
 
 ## Try it
 

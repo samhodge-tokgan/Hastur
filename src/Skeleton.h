@@ -67,4 +67,22 @@ SkeletonFrame BuildSkeletonFrame(const FrameResult& fr, int frame, int W = 0,
 std::string SkeletonToJson(const SkeletonFrame& sk,
                            const std::vector<int32_t>& parents);
 
+// Serialize a frame to a compact, dependency-free little-endian binary sidecar
+// (mirrors the `.msk` / mhr_binfmt byte style). Layout (all LE):
+//   magic "SKEL" (4 bytes), uint32 version=1,
+//   int32 frame, width, height,
+//   int32 njoints, nkeypts, nparams   (per-person array strides),
+//   int32 nparents, then parents[nparents] (int32, the static joint hierarchy),
+//   int32 npeople, then per person:
+//     int32 track_id, float focal, float cx, cy, float t[3],
+//     joints3d[njoints*3], joints2d[njoints*2], joint_xforms[njoints*8],
+//     keypoints3d[nkeypts*3], pose[nparams]   (all float32).
+std::vector<uint8_t> SkeletonToBinary(const SkeletonFrame& sk,
+                                      const std::vector<int32_t>& parents);
+
+// Inverse of SkeletonToBinary. Fills `sk` + `parents` from `bytes`. Returns false
+// on bad magic, unsupported version, or truncation (out params left partial).
+bool SkeletonFromBinary(const std::vector<uint8_t>& bytes, SkeletonFrame& sk,
+                        std::vector<int32_t>& parents);
+
 }  // namespace hastur
