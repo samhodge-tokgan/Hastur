@@ -178,6 +178,14 @@ add_executable(voronoi_validate
   tests/voronoi_validate.cpp src/VoronoiLabel.cpp)
 target_include_directories(voronoi_validate PRIVATE src)
 
+# Matte Partition CORE unit checks: partition a pooled soft alpha into a fresh
+# Cryptomatte along Voronoi regions of the input Cryptomatte's front-most ids.
+# No deps beyond VoronoiLabel + Cryptomatte.
+add_executable(matte_partition_validate
+  tests/matte_partition_validate.cpp
+  src/MattePartition.cpp src/VoronoiLabel.cpp src/Cryptomatte.cpp)
+target_include_directories(matte_partition_validate PRIVATE src)
+
 # ---------------------------------------------------------------------------
 # OpenFX C++ Support library
 # ---------------------------------------------------------------------------
