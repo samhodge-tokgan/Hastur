@@ -501,14 +501,52 @@ bool Sam3TrackerPlugin::runPrepass(const OFX::RenderArguments& args) {
   const float TRK_ASSOC = hastur::kTrkAssocIou;  // 0.5
   const int PRUNE_UNMATCHED = 8;
 
-  // rec[idx] = list of (track_id, HIGH-res 1008² probability) for that frame. We store
-  // last_high (the sidecar's output mask) — last_low stays 288 and is used only for
-  // association/IoU below. Writing the 1008 mask is the matte-resolution win.
-  std::vector<std::vector<std::pair<int, std::vector<float>>>> rec(N);
+  // STREAM each frame's 1008² mask to disk the instant the frame is finalized (every
+  // frame is recorded exactly once — seed, then forward, then backward passes). This
+  // keeps the tracker's peak memory O(active tracks) instead of O(clip × tracks): the
+  // old code buffered every frame's mask (~4 MB each) in RAM until the end — ~21 GB on
+  // a 352-frame, 15-track clip — which is what capped resolution and clip length. We
+  // now retain only a tiny per-mask bbox row (kIn space; scaled to plate px when
+  // tracks.txt is written at the end). Directory must exist before the first record.
+  const fs::path sdir(tracksOut);
+  const fs::path mdir = sdir / "masks";
+  { std::error_code ec; fs::create_directories(mdir, ec); }
+  struct MaskRow { long frame; int id; int x0, y0, x1, y1; std::string rel; };
+  std::vector<MaskRow> track_rows;
+  auto write_mask = [&](long frame, int id, const std::vector<float>& hi) {
+    if (static_cast<int>(hi.size()) < kIn * kIn) return;
+    int x0 = kIn, y0 = kIn, x1 = -1, y1 = -1;
+    std::vector<uint8_t> cov(static_cast<size_t>(kIn) * kIn, 0);
+    for (int y = 0; y < kIn; ++y)
+      for (int x = 0; x < kIn; ++x) {
+        const size_t idx = static_cast<size_t>(y) * kIn + x;
+        // last_high = G4's pred_masks_high_res, sigmoid-ed to [0,1]; write soft 0..255
+        // coverage at full 1008² (Hastur maps uint8/255 -> coverage). bbox = 0.5 iso.
+        float p = hi[idx];
+        if (p < 0.f) p = 0.f; else if (p > 1.f) p = 1.f;
+        cov[idx] = static_cast<uint8_t>(p * 255.f + 0.5f);
+        if (p > 0.5f) { x0 = std::min(x0, x); y0 = std::min(y0, y);
+                        x1 = std::max(x1, x); y1 = std::max(y1, y); }
+      }
+    if (x1 < 0) return;  // empty mask -> no file/row
+    char rel[64];
+    std::snprintf(rel, sizeof(rel), "masks/%04ld_%02d.msk", frame, id);
+    std::ofstream mk(sdir / rel, std::ios::binary | std::ios::trunc);
+    if (mk) {
+      mk.write("MSK1", 4);
+      int32_t mw = kIn, mh = kIn;
+      mk.write(reinterpret_cast<const char*>(&mw), 4);
+      mk.write(reinterpret_cast<const char*>(&mh), 4);
+      mk.write(reinterpret_cast<const char*>(cov.data()),
+               static_cast<std::streamsize>(cov.size()));
+    }
+    track_rows.push_back({frame, id, x0, y0, x1, y1, std::string(rel)});
+  };
   auto record_frame = [&](int f) {
+    const long plate = t0 + f;
     for (auto& t : tracks) {
       if (!t.active || t.last_area <= 0) continue;
-      rec[f].push_back({t.id, t.last_high});
+      write_mask(plate, t.id, t.last_high);  // streams to disk; only a bbox row is kept
     }
   };
 
@@ -602,17 +640,12 @@ bool Sam3TrackerPlugin::runPrepass(const OFX::RenderArguments& args) {
     return false;
   }
 
-  // ---- write the external-tracks sidecar (tracks.txt + masks/*.msk) ----
-  std::error_code ec;
-  const fs::path sdir(tracksOut);
-  const fs::path mdir = sdir / "masks";
-  fs::create_directories(mdir, ec);
-
-  // Distinct ids actually recorded, sorted (the "# ids" header enumerates every
-  // track id in the clip so a full Cryptomatte manifest can be baked downstream).
+  // ---- masks already streamed to disk during the passes; write tracks.txt ----
+  // (sdir/mdir were created before the passes, above.) Distinct ids actually recorded,
+  // sorted — the "# ids" header enumerates every track id so a full Cryptomatte manifest
+  // can be baked downstream.
   std::vector<int> ids;
-  for (auto& frameRec : rec)
-    for (auto& pr : frameRec) ids.push_back(pr.first);
+  for (auto& r : track_rows) ids.push_back(r.id);
   std::sort(ids.begin(), ids.end());
   ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
 
@@ -626,51 +659,15 @@ bool Sam3TrackerPlugin::runPrepass(const OFX::RenderArguments& args) {
   tt << "# ids"; for (int id : ids) tt << " " << id; tt << "\n";
   tt << "# frame track_id x0 y0 x1 y1 mask_relpath\n";
 
-  const float sx = static_cast<float>(plateW) / kIn;  // bbox mask-space (1008) -> plate px
+  const float sx = static_cast<float>(plateW) / kIn;  // bbox mask-space (kIn) -> plate px
   const float sy = static_cast<float>(plateH) / kIn;
-  long rows = 0;
-  for (int f = 0; f < N; ++f) {
-    const long plate = t0 + f;  // the real plate frame number (matches pipeline time)
-    for (auto& pr : rec[f]) {
-      const int id = pr.first;
-      const std::vector<float>& hi = pr.second;  // HIGH-res probability [0,1], kIn²
-      if (static_cast<int>(hi.size()) < kIn * kIn) continue;
-      int x0 = kIn, y0 = kIn, x1 = -1, y1 = -1;
-      std::vector<uint8_t> cov(static_cast<size_t>(kIn) * kIn, 0);
-      for (int y = 0; y < kIn; ++y)
-        for (int x = 0; x < kIn; ++x) {
-          const size_t idx = static_cast<size_t>(y) * kIn + x;
-          // last_high is G4's pred_masks_high_res already sigmoid-ed to [0,1]. Write it
-          // as soft 0..255 coverage at the FULL 1008² (kIn) resolution — 3.5x the linear
-          // detail of the old 288 downsample, which is the real matte-resolution win.
-          // Hastur's .msk loader maps uint8/255 -> float coverage. bbox = 0.5 iso-contour.
-          float p = hi[idx];
-          if (p < 0.f) p = 0.f; else if (p > 1.f) p = 1.f;
-          cov[idx] = static_cast<uint8_t>(p * 255.f + 0.5f);
-          if (p > 0.5f) { x0 = std::min(x0, x); y0 = std::min(y0, y);
-                          x1 = std::max(x1, x); y1 = std::max(y1, y); }
-        }
-      if (x1 < 0) continue;  // empty mask -> no row
-      char rel[64];
-      std::snprintf(rel, sizeof(rel), "masks/%04ld_%02d.msk", plate, id);
-      std::ofstream mk(sdir / rel, std::ios::binary | std::ios::trunc);
-      if (mk) {
-        mk.write("MSK1", 4);
-        int32_t mw = kIn, mh = kIn;
-        mk.write(reinterpret_cast<const char*>(&mw), 4);
-        mk.write(reinterpret_cast<const char*>(&mh), 4);
-        mk.write(reinterpret_cast<const char*>(cov.data()),
-                 static_cast<std::streamsize>(cov.size()));
-      }
-      tt << plate << " " << id << " " << (x0 * sx) << " " << (y0 * sy) << " "
-         << ((x1 + 1) * sx) << " " << ((y1 + 1) * sy) << " " << rel << "\n";
-      ++rows;
-    }
-  }
+  for (auto& r : track_rows)
+    tt << r.frame << " " << r.id << " " << (r.x0 * sx) << " " << (r.y0 * sy) << " "
+       << ((r.x1 + 1) * sx) << " " << ((r.y1 + 1) * sy) << " " << r.rel << "\n";
   tt.flush();
   std::fprintf(stderr,
-               "[Sam3Tracker] wrote %s/tracks.txt (%ld rows, %zu ids) + masks/\n",
-               sdir.string().c_str(), rows, ids.size());
+               "[Sam3Tracker] wrote %s/tracks.txt (%zu rows, %zu ids) + masks/\n",
+               sdir.string().c_str(), track_rows.size(), ids.size());
 
   _done = true;
   _sig = sig;
