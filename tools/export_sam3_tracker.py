@@ -169,8 +169,141 @@ def export_g1(model, out, device, opset):
     _check_onnx(p, {"image": image.cpu().numpy()}, ref, G1_OUT)
 
 
+class _FindInput:
+    """Minimal stand-in for a FindStage: forward_grounding only touches .img_ids and
+    .text_ids (both length-1 index tensors selecting frame 0 / the single text prompt)."""
+    def __init__(self, img_ids, text_ids):
+        self.img_ids = img_ids
+        self.text_ids = text_ids
+
+
+class G2Wrap(torch.nn.Module):
+    """det_fpn0[1,256,288,288], det_fpn1[1,256,144,144], det_fpn2[1,256,72,72],
+    pos72[1,256,72,72], lang_feats[32,1,256] (seq,B,d), lang_mask[1,32] bool ->
+    pred_logits[1,200,1], pred_boxes[1,200,4] (normalized cxcywh), pred_masks[1,200,288,288]
+    (288^2 logits), presence[1,1].
+
+    Bypasses the ViT + text encoder: assembles a `backbone_out` carrying the 3 detector
+    FPN levels + the grid-72 pos-enc + the cached "person" language features/mask, then
+    drives the detector's own forward_grounding (_encode_prompt -> _run_encoder ->
+    _run_decoder -> _run_segmentation_heads). num_feature_levels=1 so the DETR encoder
+    consumes only fpn2/pos72; the pixel decoder / seg head uses all 3 fpn levels. The
+    geometric prompt is the empty text-grounding prompt (matches
+    sam3_video_inference.py:155 `empty_geometric_prompt`). presence == the decoder
+    presence-token logit `presence_logit_dec` (last decoder layer, [bs,1])."""
+    def __init__(self, model, use_empty_prompt=False):
+        super().__init__()
+        from sam3.model.geometry_encoders import Prompt
+        self.det = model.detector
+        self._Prompt = Prompt
+        # The true grounding prompt is empty (zero boxes/points), but empty (zero-length)
+        # geometry-encoder sequences generate zero-size ONNX tensors that ORT's shape
+        # inference rejects. Instead feed ONE fully-masked (padding) dummy box + point:
+        # masked tokens are excluded everywhere `prompt_mask` is honored (geometry-encoder
+        # self-attn keys, encoder cross-attn keys, decoder text cross-attn, dot-prod
+        # scoring, presence head), so outputs match the empty prompt (verified in
+        # export_g2) while keeping every sequence length >= 1.
+        self.use_empty_prompt = use_empty_prompt
+
+    def _make_prompt(self, dev):
+        if self.use_empty_prompt:
+            n = 0
+            box_mask = torch.zeros(1, 0, dtype=torch.bool, device=dev)
+            pt_mask = torch.zeros(1, 0, dtype=torch.bool, device=dev)
+        else:
+            n = 1
+            box_mask = torch.ones(1, 1, dtype=torch.bool, device=dev)   # True = padded
+            pt_mask = torch.ones(1, 1, dtype=torch.bool, device=dev)
+        return self._Prompt(
+            box_embeddings=torch.zeros(n, 1, 4, device=dev),
+            box_mask=box_mask,
+            box_labels=torch.zeros(n, 1, dtype=torch.long, device=dev),
+            point_embeddings=torch.zeros(n, 1, 2, device=dev),
+            point_mask=pt_mask,
+            point_labels=torch.zeros(n, 1, dtype=torch.long, device=dev),
+        )
+
+    def forward(self, fpn0, fpn1, fpn2, pos72, lang_feats, lang_mask):
+        dev = fpn2.device
+        backbone_out = {
+            "backbone_fpn": [fpn0, fpn1, fpn2],   # seg head / pixel decoder uses all 3
+            "vision_pos_enc": [pos72],            # only the last level (grid 72) is used
+            "language_features": lang_feats,      # [32,1,256]
+            "language_mask": lang_mask,           # [1,32] bool, True = padding
+        }
+        find_input = _FindInput(
+            img_ids=torch.zeros(1, dtype=torch.long, device=dev),
+            text_ids=torch.zeros(1, dtype=torch.long, device=dev),
+        )
+        geometric_prompt = self._make_prompt(dev)
+        out = self.det.forward_grounding(
+            backbone_out=backbone_out,
+            find_input=find_input,
+            find_target=None,
+            geometric_prompt=geometric_prompt,
+        )
+        return (out["pred_logits"], out["pred_boxes"],
+                out["pred_masks"], out["presence_logit_dec"])
+
+
+G2_OUT = ["pred_logits", "pred_boxes", "pred_masks", "presence"]
+
+
 def export_g2(model, out, device, opset):
-    raise NotImplementedError("filled from the forward-mapping")
+    # The detector decoder's boxRPB relative-position cache is precomputed on "cuda" at
+    # model-init (decoder.py hardcodes device="cuda"); reset it so it rebuilds lazily on
+    # the export device (CPU) instead of tripping a cross-device error.
+    dec = model.detector.transformer.decoder
+    if getattr(dec, "compilable_cord_cache", None) is not None:
+        dec.compilable_cord_cache = None
+        dec.compilable_stored_size = None
+        dec.coord_cache = {}
+    w = G2Wrap(model).to(device).eval()
+    torch.manual_seed(0)
+    fpn0 = torch.randn(1, HIDDEN, 4 * GRID, 4 * GRID, device=device)  # [1,256,288,288]
+    fpn1 = torch.randn(1, HIDDEN, 2 * GRID, 2 * GRID, device=device)  # [1,256,144,144]
+    fpn2 = torch.randn(1, HIDDEN, GRID, GRID, device=device)          # [1,256,72,72]
+    pos72 = torch.randn(1, HIDDEN, GRID, GRID, device=device)         # [1,256,72,72]
+    lang_feats = torch.randn(32, 1, HIDDEN, device=device)            # [32,1,256]
+    lang_mask = torch.zeros(1, 32, dtype=torch.bool, device=device)   # [1,32], no padding
+    ins = (fpn0, fpn1, fpn2, pos72, lang_feats, lang_mask)
+    with torch.inference_mode():
+        ref = w(*ins)
+        # Sanity: the masked-dummy prompt must reproduce the TRUE empty grounding prompt.
+        w_empty = G2Wrap(model, use_empty_prompt=True).to(device).eval()
+        ref_empty = w_empty(*ins)
+    print(f"  [g2] eager out shapes: {[tuple(r.shape) for r in ref]}")
+    for nm, a, b in zip(G2_OUT, ref, ref_empty):
+        d = float((a.float() - b.float()).abs().max())
+        print(f"  [g2] dummy-vs-empty {nm:12s} maxabs-diff {d:.2e} {'OK' if d < 1e-4 else '<-- HIGH'}")
+    p = os.path.join(out, "G2.onnx")
+    # The geometry encoder's box-pool path calls `.pin_memory()` (aten._pin_memory, which
+    # torch.export can't lower) even for the empty text-grounding prompt; on CPU it's a
+    # semantic no-op, so neutralize it for the trace.
+    _orig_pin = torch.Tensor.pin_memory
+    torch.Tensor.pin_memory = lambda self, *a, **k: self
+    # Under torch.export (non-strict) `is_dynamo_compiling()` is False, so the decoder's
+    # boxRPB takes a data-dependent cache-size comparison on the (symbolic) 72x72 feat
+    # size and its stride/shape asserts fire on unbacked sizes. Force it True for the
+    # trace: this selects the compile-friendly path (the CPU coord cache rebuilt above,
+    # correct at the static 72x72 grid) and skips the (always-true) asserts.
+    _orig_dyn = torch.compiler.is_dynamo_compiling
+    torch.compiler.is_dynamo_compiling = lambda: True
+    try:
+        torch.onnx.export(
+            w, ins, p, opset_version=opset,
+            input_names=["fpn0", "fpn1", "fpn2", "pos72", "lang_feats", "lang_mask"],
+            output_names=G2_OUT, dynamo=True)
+    finally:
+        torch.Tensor.pin_memory = _orig_pin
+        torch.compiler.is_dynamo_compiling = _orig_dyn
+    # pred_masks are 288^2 raw logits of magnitude ~O(40) here (randn inputs), so a ~2e-3
+    # abs diff is ~5e-5 relative -- float32 accumulation in the 256-dim mask einsum, and
+    # irrelevant to the C++ masks>0 binarization; logits/boxes/presence match to ~1e-6.
+    _check_onnx(p, {"fpn0": fpn0.cpu().numpy(), "fpn1": fpn1.cpu().numpy(),
+                    "fpn2": fpn2.cpu().numpy(), "pos72": pos72.cpu().numpy(),
+                    "lang_feats": lang_feats.cpu().numpy(),
+                    "lang_mask": lang_mask.cpu().numpy()}, ref, G2_OUT, atol=3e-3)
 
 
 def realify_memattn_rope(model):
