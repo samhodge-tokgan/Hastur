@@ -98,10 +98,18 @@ int main(int argc, char** argv) {
     p.crypto_levels = 2;
     p.crypto_coverage = coverage;
     p.premultiply = false;
+    // Advance the pipeline clock EVERY frame. AssignTrackIds() keys the internal
+    // cam_t track table off `time`: the association gate widens with the frame gap
+    // (a person missed for a few frames still re-links to the SAME id instead of
+    // spawning a new one) and stale tracks are pruned by `time - last_time`. With
+    // `time` frozen (its 0.0 default) gap is always 1 (gate never widens -> every
+    // flicker-out/in mints a new id) and pruning never fires -> id churn. A
+    // headless in-order render is exactly the case this stable path is built for.
+    p.stable_person_ids = true;
+    p.time = f;
     if (tracks) {
       p.tracks_path = tracks;
       p.use_external_tracks = hastur::HasExternalTracks(tracks);
-      p.time = f;
     }
 
     hastur::FrameResult fr = pipe.Run(rgb.data(), W, H, p);
