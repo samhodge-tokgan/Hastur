@@ -120,10 +120,11 @@ def export_person_language(model, out, device):
     lf = tout["language_features"]          # [32,1,256]
     lm = tout["language_mask"]              # [1,32] bool
     savenpy(os.path.join(out, "const_lang_feats_person.npy"), lf.float())
-    # bool mask -> save as bool
-    lm_np = lm.detach().cpu().numpy().astype(bool)
+    # The C++ engine loads this via LoadNpyFloat (float32 0/1) and thresholds >0.5 to
+    # the bool key-padding mask, so save float32 (NOT bool). True/1 = padding.
+    lm_np = lm.detach().cpu().numpy().astype(np.float32)
     np.save(os.path.join(out, "const_lang_mask_person.npy"), lm_np)
-    print(f"  wrote const_lang_mask_person.npy {lm_np.shape} bool (True-count {int(lm_np.sum())})")
+    print(f"  wrote const_lang_mask_person.npy {lm_np.shape} float32 (pad-count {int(lm_np.sum())})")
 
 
 # --- the five graphs --------------------------------------------------------------
@@ -403,8 +404,9 @@ class G3Wrap(torch.nn.Module):
         out = self.enc(src=[src], src_key_padding_mask=[None], src_pos=[src_pos],
                        prompt=prompt, prompt_pos=prompt_pos, prompt_key_padding_mask=None,
                        feat_sizes=[(GRID, GRID)], num_obj_ptr_tokens=num_obj_ptr_tokens)
-        mem = out["memory"]                       # [5184,1,256]
-        return mem.permute(1, 2, 0).view(1, HIDDEN, GRID, GRID)
+        # Return the encoder memory SEQ-FIRST [5184,1,256]; the C++ engine's SeqToBCHW
+        # does the ->[1,256,72,72] reshape itself (don't double-convert here).
+        return out["memory"]
 
 
 def export_g3(model, out, device, opset):
