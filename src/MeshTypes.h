@@ -229,6 +229,18 @@ struct CameraMatrices {
   std::array<float, 16> ndc_to_world{};
 };
 
+// Lightweight retained per-person MHR raster AOVs (a subset of RasterAov: silhouette
+// alpha, canonical Pref position, camera-space body depth). Populated only when
+// PipelineParams::retain_person_aovs is set; aligned 1:1 with FrameResult::people.
+// Consumers: Rotobot-Next's topology bridge (Pref-guided island bridge) + depth work
+// read these per-person inputs, emitted via hastur_export --emit-mhr (WriteAovExr).
+struct PersonAov {
+  int width = 0, height = 0;
+  std::vector<float> coverage;  // W*H     MHR silhouette alpha [0,1]
+  std::vector<float> pref;      // W*H*3   canonical reference position [0,1]
+  std::vector<float> depth;     // W*H     camera-space body depth (metres)
+};
+
 struct FrameResult {
   std::vector<PersonResult> people;  // depth-ordered for over-composite
   RgbaImage render;                  // grey mesh(es) + coverage alpha
@@ -236,6 +248,7 @@ struct FrameResult {
   AovBuffers aovs;
   CryptoResult crypto;
   CameraMatrices camera;
+  std::vector<PersonAov> person_aovs;  // per-person {alpha,pref,depth}; retain-gated
 };
 
 }  // namespace hastur

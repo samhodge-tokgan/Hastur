@@ -25,6 +25,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "vendor/stb_image_write.h"
 
+#include "AovExr.h"           // WriteAovExr (per-person MHR {alpha,pref,depth} EXR)
 #include "CryptoExr.h"
 #include "Cryptomatte.h"      // CryptoIdFloat
 #include "ExternalTracks.h"
@@ -71,6 +72,7 @@ int main(int argc, char** argv) {
   const char* tracks = arg(argc, argv, "--tracks");
   const char* pool_dir = arg(argc, argv, "--pool");  // write pool_%04d.png (union fg)
   const char* refined_pat = arg(argc, argv, "--refined");  // read refined pooled matte
+  const char* emit_mhr = arg(argc, argv, "--emit-mhr");    // dir for mhr_%04d.exr AOVs
   const float max_dist = arg(argc, argv, "--max-dist")
                              ? std::atof(arg(argc, argv, "--max-dist")) : 256.0f;
 
@@ -95,6 +97,7 @@ int main(int argc, char** argv) {
     p.detector_score_thresh = score;
     p.max_people = maxpeople;
     p.emit_aovs = true;              // populate fr.crypto
+    p.retain_person_aovs = emit_mhr != nullptr;  // keep per-person {alpha,pref,depth}
     p.crypto_levels = 2;
     p.crypto_coverage = coverage;
     p.premultiply = false;
@@ -185,6 +188,19 @@ int main(int argc, char** argv) {
                  fr.people.size(), wrote ? "ok" : "FAIL",
                  refined ? " (refined)" : "", js.empty() ? "-" : "ok");
     if (wrote) ++ok;
+
+    // Per-person MHR AOV EXR (alpha + Pref + body depth), aligned to person_NN, for
+    // Rotobot-Next's Pref-guided topology bridge + depth work. person_aovs[i] <-> people[i].
+    if (emit_mhr && !fr.person_aovs.empty()) {
+      std::vector<std::string> names(fr.person_aovs.size());
+      for (size_t i = 0; i < fr.people.size() && i < names.size(); ++i) {
+        char nb[32]; std::snprintf(nb, sizeof(nb), "person_%02d", fr.people[i].track_id);
+        names[i] = nb;
+      }
+      const std::string mp = std::string(emit_mhr) + "/mhr_" + pad4(f) + ".exr";
+      const bool mw = hastur::WriteAovExr(mp, W, H, names, fr.person_aovs);
+      std::fprintf(stderr, "frame %d: mhr-aov=%s\n", f, mw ? "ok" : "FAIL");
+    }
   }
   std::fprintf(stderr, "hastur_export: %d/%d frames written to %s\n", ok,
                last - first + 1, out_dir);

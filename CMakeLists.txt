@@ -586,7 +586,7 @@ if(HASTUR_WITH_ONNX)
     src/CameraMatrix.cpp src/Cryptomatte.cpp src/LeotardMask.cpp
     src/SurfaceParam.cpp src/OrtSessionManager.cpp src/SoftwareRasterizer.cpp
     src/Sam3dBodyPipeline.cpp src/Sam3TrackerEngine.cpp src/Sam3MultiTracker.cpp
-    src/CryptoExr.cpp src/TinyExrImpl.cpp vendor/miniz.c
+    src/CryptoExr.cpp src/AovExr.cpp src/TinyExrImpl.cpp vendor/miniz.c
     src/MattePartition.cpp src/VoronoiLabel.cpp
   )
   target_include_directories(hastur_export PRIVATE src tools vendor "${eigen_SOURCE_DIR}")

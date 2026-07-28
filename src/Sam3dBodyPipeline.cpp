@@ -967,6 +967,20 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
     // Coverage AOV == final composited alpha.
     for (size_t px = 0; px < n1; ++px) av.coverage[px] = acc[px * 4 + 3];
 
+    // Retain per-person {alpha,pref,depth} (aligned to result.people) for downstream
+    // consumers (Rotobot-Next topology bridge). Move out of person_aov — the merge
+    // above already consumed them. Only the three needed buffers are kept.
+    if (p.retain_person_aovs) {
+      result.person_aovs.resize(person_aov.size());
+      for (size_t i = 0; i < person_aov.size(); ++i) {
+        result.person_aovs[i].width = W;
+        result.person_aovs[i].height = H;
+        result.person_aovs[i].coverage = std::move(person_aov[i].coverage);
+        result.person_aovs[i].pref = std::move(person_aov[i].pref);
+        result.person_aovs[i].depth = std::move(person_aov[i].depth);
+      }
+    }
+
     // Cryptomatte: persons front-to-back (near first = reverse of paint order).
     std::vector<CryptoPerson> cps;
     cps.reserve(order.size());
