@@ -177,8 +177,41 @@ def export_g3(model, out, device, opset):
     raise NotImplementedError("filled from the forward-mapping")
 
 
+class G4Wrap(torch.nn.Module):
+    """backbone_features[1,256,72,72], high_res_0=fpn0[1,32,288,288],
+    high_res_1=fpn1[1,64,144,144] -> low_res(best,[1,1,288,288]),
+    pred_masks_high_res(best,[1,1,1008,1008]), ious[1,3], obj_ptr[1,256],
+    object_score_logits[1,1]. The no-prompt tracking decode: _forward_sam_heads with
+    point_inputs=mask_inputs=None, multimask_output=True (sam3_tracker_base.py:218-387).
+    Returns the C++ order (best low, best high, ious, obj_ptr, osl)."""
+    def __init__(self, model):
+        super().__init__()
+        self.tr = model.tracker
+
+    def forward(self, backbone_features, high_res_0, high_res_1):
+        (low_mm, high_mm, ious, low_best, high_best, obj_ptr, osl) = \
+            self.tr._forward_sam_heads(
+                backbone_features, point_inputs=None, mask_inputs=None,
+                high_res_features=[high_res_0, high_res_1], multimask_output=True)
+        return low_best, high_best, ious, obj_ptr, osl
+
+
+G4_OUT = ["low_res_masks", "pred_masks_high_res", "ious", "obj_ptr", "object_score_logits"]
+
+
 def export_g4(model, out, device, opset):
-    raise NotImplementedError("filled from the forward-mapping")
+    w = G4Wrap(model).to(device).eval()
+    bf = torch.zeros(1, 256, GRID, GRID, device=device)
+    h0 = torch.zeros(1, 32, 4 * GRID, 4 * GRID, device=device)   # [1,32,288,288]
+    h1 = torch.zeros(1, 64, 2 * GRID, 2 * GRID, device=device)   # [1,64,144,144]
+    with torch.inference_mode():
+        ref = w(bf, h0, h1)
+    p = os.path.join(out, "G4.onnx")
+    torch.onnx.export(w, (bf, h0, h1), p, opset_version=opset,
+                      input_names=["backbone_features", "high_res_0", "high_res_1"],
+                      output_names=G4_OUT, dynamo=True)
+    _check_onnx(p, {"backbone_features": bf.cpu().numpy(), "high_res_0": h0.cpu().numpy(),
+                    "high_res_1": h1.cpu().numpy()}, ref, G4_OUT)
 
 
 class G5Wrap(torch.nn.Module):
