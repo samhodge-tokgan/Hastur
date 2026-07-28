@@ -173,8 +173,140 @@ def export_g2(model, out, device, opset):
     raise NotImplementedError("filled from the forward-mapping")
 
 
+def realify_memattn_rope(model):
+    """The tracker memory-attention (tracker.transformer) RoPEAttention blocks also
+    carry complex freqs_cis. Realify them (cos/sin buffers, use_rope_real=True) and
+    replace forward with an export-safe version: (a) no in-place slice-assignment
+    (rebuild k via cat) so num_k_exclude_rope can be a DYNAMIC int64 the C++ varies
+    per frame; (b) drop the fa3 / freqs-recompute / shape-assert branches (src is a
+    fixed 72x72=5184 grid). Also force _forward_ca to pass num_k_exclude_rope
+    unconditionally (the tracking path always has object pointers)."""
+    import torch.nn.functional as F
+    from sam3.sam import transformer as T
+    from sam3.sam.rope import apply_rotary_enc_real
+
+    # freqs_cis here is a plain attribute (not a registered buffer), so model.to()
+    # never moved it off the cuda device it was built on -> pin to the model's device.
+    dev = next(model.parameters()).device
+    n = 0
+    for m in model.tracker.transformer.modules():
+        if isinstance(m, T.RoPEAttention):
+            fc = m.freqs_cis.to(dev)
+            m.use_rope_real = True
+            m.freqs_cis_real = fc.real.contiguous().to(dev)
+            m.freqs_cis_imag = fc.imag.contiguous().to(dev)
+            n += 1
+
+    def _rope_pairs(x, fr, fi):
+        # x[...,D]; fr,fi broadcastable to [...,D/2]. Complex rotate over (even,odd).
+        lead = x.shape[:-1]
+        xr = x.reshape(*lead, x.shape[-1] // 2, 2)
+        a, b = xr[..., 0], xr[..., 1]
+        return torch.stack([a * fr - b * fi, a * fi + b * fr], dim=-1).reshape(*lead, x.shape[-1])
+
+    def rope_forward(self, q, k, v, num_k_exclude_rope=0):
+        q = self._separate_heads(self.q_proj(q), self.num_heads)   # [B,H,Lq,D]
+        k = self._separate_heads(self.k_proj(k), self.num_heads)   # [B,H,Lk,D]
+        v = self._separate_heads(self.v_proj(v), self.num_heads)
+        fr, fi = self.freqs_cis_real, self.freqs_cis_imag          # [Lq, D/2]
+        Lq, Dh = fr.shape[0], fr.shape[1]
+        # num_k_exclude_rope arrives as a 1-D tensor whose LENGTH is the pointer-token
+        # count; nx = .shape[0] is a BACKED dynamic dim (unlike an unbacked .item()
+        # value), so the k split and the memory-frame reshape guard cleanly. The C++
+        # engine feeds a length-nx int64 tensor (values unused). Self-attn passes 0.
+        if torch.is_tensor(num_k_exclude_rope) and num_k_exclude_rope.dim() > 0:
+            nx = num_k_exclude_rope.shape[0]
+        else:
+            nx = int(num_k_exclude_rope)
+        nk = k.shape[-2]
+        num_k_rope = nk - nx
+        k_rope, k_rest = k[:, :, :num_k_rope], k[:, :, num_k_rope:]
+        q = _rope_pairs(q, fr.view(1, 1, Lq, Dh), fi.view(1, 1, Lq, Dh))
+        if self.rope_k_repeat:
+            # k_rope spans n_mem memory frames of Lq tokens; apply the SAME per-position
+            # freqs to each frame via a reshape-broadcast ([B,H,-1,Lq,D]) instead of a
+            # data-dependent .repeat of the freqs table (which torch.export can't guard).
+            B, H = k_rope.shape[0], k_rope.shape[1]
+            kr = k_rope.reshape(B, H, -1, Lq, k_rope.shape[-1])
+            kr = _rope_pairs(kr, fr.view(1, 1, 1, Lq, Dh), fi.view(1, 1, 1, Lq, Dh))
+            k_rope = kr.reshape(B, H, -1, k_rope.shape[-1])
+        else:
+            k_rope = _rope_pairs(k_rope, fr.view(1, 1, Lq, Dh), fi.view(1, 1, Lq, Dh))
+        k = torch.cat([k_rope, k_rest], dim=2)
+        out = F.scaled_dot_product_attention(q, k, v)
+        return self.out_proj(self._recombine_heads(out))
+
+    T.RoPEAttention.forward = rope_forward
+
+    from sam3.model import decoder as D
+
+    def _forward_ca(self, tgt, memory, query_pos, pos, num_k_exclude_rope=0):
+        if self.cross_attn_image is None:
+            return tgt
+        kwds = {}
+        if isinstance(self.cross_attn_image, T.RoPEAttention):
+            kwds = {"num_k_exclude_rope": num_k_exclude_rope}
+        tgt2 = self.norm2(tgt)
+        tgt2 = self.cross_attn_image(
+            q=tgt2 + query_pos if self.pos_enc_at_cross_attn_queries else tgt2,
+            k=memory + pos if self.pos_enc_at_cross_attn_keys else memory,
+            v=memory, **kwds)
+        return tgt + self.dropout2(tgt2)
+
+    D.TransformerDecoderLayerv2._forward_ca = _forward_ca
+    print(f"  [patch] realified {n} mem-attn rope blocks + dynamic num_k_exclude_rope")
+
+
+class G3Wrap(torch.nn.Module):
+    """src[5184,1,256], src_pos[5184,1,256], prompt[L,1,64], prompt_pos[L,1,64],
+    num_obj_ptr_tokens(int64 scalar) -> memory-conditioned pix_feat [1,256,72,72].
+    Just the transformer encoder call (sam3_tracker_base.py:782-794); the memory-bank
+    assembly that builds prompt/prompt_pos lives in the C++ engine."""
+    def __init__(self, model):
+        super().__init__()
+        self.enc = model.tracker.transformer.encoder
+
+    def forward(self, src, src_pos, prompt, prompt_pos, num_obj_ptr_tokens):
+        out = self.enc(src=[src], src_key_padding_mask=[None], src_pos=[src_pos],
+                       prompt=prompt, prompt_pos=prompt_pos, prompt_key_padding_mask=None,
+                       feat_sizes=[(GRID, GRID)], num_obj_ptr_tokens=num_obj_ptr_tokens)
+        mem = out["memory"]                       # [5184,1,256]
+        return mem.permute(1, 2, 0).view(1, HIDDEN, GRID, GRID)
+
+
 def export_g3(model, out, device, opset):
-    raise NotImplementedError("filled from the forward-mapping")
+    # The variable-length memory RoPE (dynamic num_k_rope) trips torch.export's
+    # should_swap/stride guards on unbacked sizes; size-oblivious guarding resolves
+    # them (the branches are stride-order choices, correct either way).
+    try:
+        from torch.fx.experimental import _config as fx_config
+        fx_config.backed_size_oblivious = True
+    except Exception:
+        pass
+    realify_memattn_rope(model)
+    w = G3Wrap(model).to(device).eval()
+    HW = GRID * GRID
+    n_mem, n_ptr = 3, 5                            # representative memory bank
+    L = n_mem * HW + n_ptr * 4
+    src = torch.randn(HW, 1, HIDDEN, device=device)
+    src_pos = torch.randn(HW, 1, HIDDEN, device=device)
+    prompt = torch.randn(L, 1, MEMDIM, device=device)
+    prompt_pos = torch.randn(L, 1, MEMDIM, device=device)
+    nopt = torch.zeros(n_ptr * 4, dtype=torch.int64, device=device)  # LENGTH = #ptr tokens
+    ins = (src, src_pos, prompt, prompt_pos, nopt)
+    with torch.inference_mode():
+        ref = w(*ins)
+    p = os.path.join(out, "G3.onnx")
+    Ldim = torch.export.Dim("L", min=HW, max=8 * HW)
+    Pdim = torch.export.Dim("P", min=4, max=4 * 16)
+    torch.onnx.export(
+        w, ins, p, opset_version=opset,
+        input_names=["src", "src_pos", "prompt", "prompt_pos", "num_obj_ptr_tokens"],
+        output_names=["memory"],
+        dynamic_shapes=({}, {}, {0: Ldim}, {0: Ldim}, {0: Pdim}), dynamo=True)
+    _check_onnx(p, {"src": src.cpu().numpy(), "src_pos": src_pos.cpu().numpy(),
+                    "prompt": prompt.cpu().numpy(), "prompt_pos": prompt_pos.cpu().numpy(),
+                    "num_obj_ptr_tokens": nopt.cpu().numpy()}, [ref], ["memory"])
 
 
 class G4Wrap(torch.nn.Module):
