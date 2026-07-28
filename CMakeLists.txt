@@ -595,6 +595,20 @@ if(HASTUR_WITH_ONNX)
     set_target_properties(hastur_export PROPERTIES
       BUILD_RPATH "${ORT_DIR}/lib" INSTALL_RPATH "${ORT_DIR}/lib")
   endif()
+
+  # hastur_track: headless SAM 3 video tracker (the Sam3TrackerPlugin whole-clip
+  # pre-pass with PNG input) -> external-tracks sidecar (tracks.txt + masks) for
+  # temporally-stable person_NN ids. See tools/hastur_track.cpp.
+  add_executable(hastur_track
+    tools/hastur_track.cpp
+    src/Sam3TrackerEngine.cpp src/Sam3MultiTracker.cpp src/OrtSessionManager.cpp
+  )
+  target_include_directories(hastur_track PRIVATE src tools vendor)
+  target_link_libraries(hastur_track PRIVATE onnxruntime ${HASTUR_FS_LIB})
+  if(NOT WIN32)
+    set_target_properties(hastur_track PROPERTIES
+      BUILD_RPATH "${ORT_DIR}/lib" INSTALL_RPATH "${ORT_DIR}/lib")
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------
