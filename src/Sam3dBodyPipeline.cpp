@@ -787,19 +787,24 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
     ropt.skin_rgb[k] = p.skin_rgb[k];
   }
 
-  // --- Per-person loop ----------------------------------------------------
+  // --- Per-person: pass 1 (serial GPU chain) then pass 2 (parallel CPU mesh) -------
+  // The body regressor / hand refiner / pose-corrective run on the single GPU (and the
+  // hand refiner lazily creates its engine), so pass 1 stays serial. The MHR mesh
+  // FK/LBS is pure CPU, const and independent, so it parallelizes across people in
+  // pass 2 (each writes its own result.people[i].mesh — no shared state, deterministic).
+  result.people.resize(n_people);
+  std::vector<std::vector<float>> pose_corr(n_people);
+  std::vector<char> have_pose_corr(n_people, 0);
+
   for (int i = 0; i < n_people; ++i) {
-    const BBox& box = dets[i];
-    PersonResult person;
-    person.box = box;
-    // External tracks pre-assign the stable identity (person_NN == tracker id);
-    // the cam_t association below is skipped for this path.
+    PersonResult& person = result.people[i];
+    person.box = dets[i];
     if (p.use_external_tracks && i < static_cast<int>(ext_ids.size()))
       person.track_id = ext_ids[i];
 
     // 2. crop + camera conditioning.
     auto tc = Clock::now();
-    CropInputs crop = MakeCrop(rgb, W, H, box, K, kBodyPad);
+    CropInputs crop = MakeCrop(rgb, W, H, person.box, K, kBodyPad);
     LogStage("crop", Ms(tc, Clock::now()));
 
     // 3. body regressor.
@@ -816,12 +821,7 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
     }
     person.has_hands = any_hand;
 
-    // 3c. M7 hand refiner: when gated (and sam3dbody_hand.onnx is present), crop
-    // each hand (pad 0.9, L/R flip), run the hand decoder, and merge the refined
-    // hand PCA/scale/shape into person.pred.pred (wrist-angle + box-size gated).
-    // The updated pred then flows through pose-corrective + MHR below, so the mesh
-    // hands are re-solved. Body-only behavior is unchanged when the gate is off or
-    // the hand model/asset is absent.
+    // 3c. M7 hand refiner (gated). Lazily creates its engine -> keep serial.
     if (any_hand) {
       auto th = Clock::now();
       const bool merged = s.RefineHands(person, rgb, W, H, K, p);
@@ -829,23 +829,29 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
       (void)merged;
     }
 
-    // 4. pose-corrective ONNX -> per-vertex offsets (cm, pre-flip).
+    // 4. pose-corrective ONNX -> per-vertex offsets (cm, pre-flip); stash for pass 2.
     auto tp = Clock::now();
     std::array<float, 889> jp = s.mhr->JointParameters(person.pred.pred);
     std::vector<float> pc;
     const bool have_pc = s.RunPoseCorrective(jp, pc);
     LogStage("pose-corrective", Ms(tp, Clock::now()));
-
-    // 5. MHR mesh (C++ FK+LBS), with the pose-corrective offsets injected.
-    auto tm = Clock::now();
-    person.mesh = s.mhr->Run(person.pred.pred, have_pc ? pc.data() : nullptr);
-    LogStage("mhr-mesh", Ms(tm, Clock::now()));
+    pose_corr[i] = std::move(pc);
+    have_pose_corr[i] = have_pc ? 1 : 0;
 
     // 6. perspective camera solve (body default_scale = 1).
-    person.cam = PerspectiveProjection(person.pred.pred_cam, box, kBodyPad, K,
+    person.cam = PerspectiveProjection(person.pred.pred_cam, person.box, kBodyPad, K,
                                         /*default_scale=*/1.f);
+  }
 
-    result.people.push_back(std::move(person));
+  // 5. MHR mesh (C++ FK+LBS) — parallel across people (pure CPU, independent).
+  {
+    auto tm = Clock::now();
+#pragma omp parallel for schedule(dynamic)
+    for (int i = 0; i < n_people; ++i)
+      result.people[i].mesh =
+          s.mhr->Run(result.people[i].pred.pred,
+                     have_pose_corr[i] ? pose_corr[i].data() : nullptr);
+    LogStage("mhr-mesh", Ms(tm, Clock::now()));
   }
 
   if (result.people.empty()) {
