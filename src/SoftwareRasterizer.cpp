@@ -12,6 +12,10 @@
 #include <limits>
 #include <vector>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 namespace hastur {
 namespace {
 
@@ -176,6 +180,11 @@ RgbaImage Render(const Mesh& mesh, const Camera& cam, int W, int H,
   const float inv_fx = 1.0f / fx;
   const float inv_fy = 1.0f / fy;
 
+  // Scanline-band parallelism: every thread walks ALL triangles but writes only its
+  // own disjoint horizontal band of framebuffer rows (clamped py range below). No
+  // z-buffer race (disjoint pixels) and each pixel still sees triangles in index
+  // order f=0..nf-1, so the result is bit-identical to the serial rasterizer.
+#pragma omp parallel
   for (int f = 0; f < nf; ++f) {
     const int i0 = faces[3 * f], i1 = faces[3 * f + 1], i2 = faces[3 * f + 2];
     const PV &a = pv[i0], &b = pv[i1], &c = pv[i2];
@@ -199,7 +208,16 @@ RgbaImage Render(const Mesh& mesh, const Camera& cam, int W, int H,
 
     const float ia = 1.0f / a.z, ib = 1.0f / b.z, ic = 1.0f / c.z;
 
-    for (int py = miny; py <= maxy; ++py) {
+    // This thread's row band; serial (no OpenMP) => the whole framebuffer.
+#ifdef _OPENMP
+    const int _nb = omp_get_num_threads(), _bi = omp_get_thread_num();
+    const int by0 = static_cast<int>(static_cast<long long>(_bi) * SH / _nb);
+    const int by1 = static_cast<int>(static_cast<long long>(_bi + 1) * SH / _nb);
+#else
+    const int by0 = 0, by1 = SH;
+#endif
+    const int py_lo = std::max(miny, by0), py_hi = std::min(maxy, by1 - 1);
+    for (int py = py_lo; py <= py_hi; ++py) {
       const float ypc = py + 0.5f;
       for (int px = minx; px <= maxx; ++px) {
         const float xpc = px + 0.5f;
@@ -301,8 +319,11 @@ RgbaImage Render(const Mesh& mesh, const Camera& cam, int W, int H,
     }
   }
 
-  // Box-downsample the supersampled buffer to the output resolution.
+  // Box-downsample the supersampled buffer to the output resolution. Each output
+  // pixel is independent (reads the now-finished supersample buffers, writes its own
+  // out/AOV slot), so a plain parallel-for over rows is bit-identical.
   const float inv_samples = 1.0f / static_cast<float>(ss * ss);
+#pragma omp parallel for schedule(static)
   for (int y = 0; y < H; ++y) {
     for (int x = 0; x < W; ++x) {
       float sr = 0.0f, sg = 0.0f, sb = 0.0f;
