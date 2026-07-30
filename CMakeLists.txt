@@ -180,6 +180,13 @@ add_executable(voronoi_validate
   tests/voronoi_validate.cpp src/VoronoiLabel.cpp)
 target_include_directories(voronoi_validate PRIVATE src)
 
+# Confidence-aware negative-space open (inter-limb void fix) unit checks: a synthetic
+# low-confidence interior gap OPENS while the confident body / small specks stay solid,
+# and ErodeSoftByRadius zeros the outer band. Pure CPU, no ONNX/GPU/models.
+add_executable(confidence_open_validate
+  tests/confidence_open_validate.cpp src/ConfidenceOpen.cpp)
+target_include_directories(confidence_open_validate PRIVATE src)
+
 # Matte Partition CORE unit checks: partition a pooled soft alpha into a fresh
 # Cryptomatte along Voronoi regions of the input Cryptomatte's front-most ids.
 # No deps beyond VoronoiLabel + Cryptomatte.
@@ -337,6 +344,9 @@ if(HASTUR_WITH_ONNX)
     # reuses Hastur's OrtSessionManager/OrtAccel; graphs (G1..G5) are runtime assets.
     src/Sam3TrackerEngine.cpp
     src/Sam3MultiTracker.cpp
+    # Confidence-aware negative-space open (inter-limb void fix), shared by the tracker's
+    # Detect/Propagate and the SAM-3D-Body coverage union. Pure CPU, no ONNX dep.
+    src/ConfidenceOpen.cpp
   )
   # Cryptomatte.cpp is compiled unconditionally (also used by the Matte Partition
   # plugin above), so it is intentionally NOT listed here.
@@ -491,6 +501,7 @@ if(HASTUR_WITH_ONNX)
     tests/sam3_tracker_compile.cpp
     src/Sam3TrackerEngine.cpp
     src/Sam3MultiTracker.cpp
+    src/ConfidenceOpen.cpp
     src/OrtSessionManager.cpp
   )
   target_include_directories(sam3_tracker_compile PRIVATE src)
@@ -552,6 +563,7 @@ if(HASTUR_WITH_ONNX)
     # (unused by the smoke harness itself; the OFX node wiring lands in Phase 5e-ii).
     src/Sam3TrackerEngine.cpp
     src/Sam3MultiTracker.cpp
+    src/ConfidenceOpen.cpp
   )
   target_include_directories(pipeline_smoke PRIVATE src tools "${eigen_SOURCE_DIR}")
   # MSVC needs _USE_MATH_DEFINES for M_PI (CameraSolver.cpp). The plugin target defines

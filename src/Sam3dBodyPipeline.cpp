@@ -18,6 +18,7 @@
 
 #include "CameraMatrix.h"
 #include "CameraSolver.h"
+#include "ConfidenceOpen.h"
 #include "CropAffine.h"
 #include "Cryptomatte.h"
 #include "DetectorEngine.h"
@@ -199,8 +200,39 @@ void CleanDetMask(DetMask& m) {
     if (y > 0) push(x, y - 1);
     if (y < H - 1) push(x, y + 1);
   }
-  for (size_t i = 0; i < N; ++i)
-    if (d[i] < kSolid && !outside[i]) d[i] = 1.f;  // interior hole -> fill
+  // interior holes = not-solid AND not border-connected. Fill only SMALL ones (noise / decoder
+  // speckle); PRESERVE large enclosed negative space -- the inter-limb gap the tracker's
+  // confidence-open intentionally opened (see src/ConfidenceOpen.h). holeFrac caps the fillable
+  // hole area as a fraction of the subject area (mirror crop_track.clean_seed). Env override.
+  auto envF = [](const char* n, float dflt) {
+    const char* s = std::getenv(n);
+    if (!s || !*s) return dflt;
+    char* e = nullptr; float v = std::strtof(s, &e); return (e == s) ? dflt : v; };
+  static const float kHoleFrac = envF("HASTUR_MASK_HOLEFRAC", 0.03f);
+  size_t subjArea = 0;
+  for (size_t i = 0; i < N; ++i) if (d[i] >= kSolid) ++subjArea;
+  const size_t holeCap = static_cast<size_t>(std::max(1.0, kHoleFrac * static_cast<double>(subjArea)));
+  std::vector<uint8_t> hvis(N, 0);
+  std::vector<int> hstack, hcomp;
+  for (int sy = 0; sy < H; ++sy)
+    for (int sx = 0; sx < W; ++sx) {
+      const size_t si = static_cast<size_t>(sy) * W + sx;
+      if (hvis[si] || outside[si] || d[si] >= kSolid) continue;  // only enclosed not-solid pixels
+      hstack.clear(); hcomp.clear();
+      hstack.push_back(static_cast<int>(si)); hvis[si] = 1;
+      while (!hstack.empty()) {
+        const int idx = hstack.back(); hstack.pop_back(); hcomp.push_back(idx);
+        const int x = idx % W, y = idx / W;
+        const int nb[4][2] = {{x - 1, y}, {x + 1, y}, {x, y - 1}, {x, y + 1}};
+        for (auto& q : nb) {
+          if (q[0] < 0 || q[1] < 0 || q[0] >= W || q[1] >= H) continue;
+          const size_t ni = static_cast<size_t>(q[1]) * W + q[0];
+          if (!hvis[ni] && !outside[ni] && d[ni] < kSolid) { hvis[ni] = 1; hstack.push_back(static_cast<int>(ni)); }
+        }
+      }
+      if (hcomp.size() <= holeCap)
+        for (int idx : hcomp) d[idx] = 1.f;  // small enclosed hole -> fill; large -> preserve (open)
+    }
 
   // 3. mild edge gain (smoothstep), keeping a soft anti-aliased band.
   for (size_t i = 0; i < N; ++i) {
@@ -994,11 +1026,27 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
           else if (have_mesh) cov = std::move(a.coverage);
           break;
         case CryptoCoverage::Both:
-          if (have_mesh) {
+          if (have_mesh && have_mask) {
+            // Eroded-MHR fill: the mesh silhouette itself BRIDGES close limbs, so a plain
+            // max(mesh,mask) union re-fills the negative space the confidence-open mask opened.
+            // Erode the mesh by k = clip(erodeFrac*sqrt(mesh_area), 8, 80) -- adaptive to the
+            // person's ON-SCREEN scale (sqrt(area) = character pixel size) -- so it fills back
+            // deep-interior body holes WITHOUT closing the inter-limb gap. Env HASTUR_MHR_ERODEFRAC.
+            size_t meshArea = 0;
+            for (size_t px = 0; px < n1; ++px)
+              if (a.coverage[px] > 0.5f) ++meshArea;
+            static const float kErodeFrac = []() {
+              const char* s = std::getenv("HASTUR_MHR_ERODEFRAC");
+              if (!s || !*s) return 0.03f;
+              char* e = nullptr; float v = std::strtof(s, &e); return (e == s) ? 0.03f : v; }();
+            int k = static_cast<int>(std::lround(kErodeFrac * std::sqrt(static_cast<double>(meshArea))));
+            k = std::min(80, std::max(8, k));
+            std::vector<float> mesh_e = ErodeSoftByRadius(a.coverage, W, H, k);
+            cov = std::move(mask_cov);
+            for (size_t px = 0; px < n1; ++px)
+              cov[px] = std::max(cov[px], mesh_e[px]);
+          } else if (have_mesh) {
             cov = std::move(a.coverage);
-            if (have_mask)
-              for (size_t px = 0; px < n1; ++px)
-                cov[px] = std::max(cov[px], mask_cov[px]);
           } else if (have_mask) {
             cov = std::move(mask_cov);
           }

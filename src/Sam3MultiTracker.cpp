@@ -8,6 +8,7 @@
 #include <fstream>
 #include <stdexcept>
 
+#include "ConfidenceOpen.h"
 #include "OrtAccel.h"
 
 namespace hastur {
@@ -282,7 +283,7 @@ void Sam3MultiTracker::BeginFrame(const float* frame_chw1008, int frame_idx, int
 }
 
 // ---------------------------------------------------------------- detector
-static void ResizeBinToSoft(const std::vector<uint8_t>& src, int sh, int sw,
+[[maybe_unused]] static void ResizeBinToSoft(const std::vector<uint8_t>& src, int sh, int sw,
                             std::vector<float>& out, int H, int W) {
   out.assign((size_t)H * W, 0.f);
   for (int oy = 0; oy < H; ++oy) {
@@ -339,7 +340,12 @@ std::vector<Det> Sam3MultiTracker::Detect(float score_thresh, float nms_iou) {
     Det d; d.score = c.prob;
     long area = 0; for (int i = 0; i < MHW; ++i) area += b[i];
     d.area = area;
-    ResizeBinToSoft(b, kMLowRes, kMLowRes, d.soft1008, kMImgSize, kMImgSize);
+    // Confidence-aware seed coverage: keep the prob>0.5 silhouette (bin288, still used for
+    // association) but RE-OPEN large low-confidence interior negative space -- the inter-limb gaps
+    // the plain `m>0` binarise fills. soft1008 is the seed matte the tracker + MatAnyone2 propagate
+    // from. See src/ConfidenceOpen.h.
+    d.soft1008 = ConfidenceOpen(masks.data.data() + static_cast<size_t>(c.q) * MHW,
+                                kMLowRes, kMLowRes, kMImgSize, kMImgSize);
     d.bin288 = b;
     kept.push_back(std::move(d));
     kept_bin.push_back(std::move(b));
@@ -500,9 +506,10 @@ const std::vector<float>& Sam3MultiTracker::PropagateObj(ObjState& obj, bool rev
   // It is already computed above (fed to G5 for memory) — previously discarded. Keeping
   // it is the matte-resolution win: the sidecar can carry 1008² instead of the 288
   // downsample (3.5x linear), with no extra model compute.
-  obj.last_high.resize(high.data.size());
-  for (size_t i = 0; i < high.data.size(); ++i)
-    obj.last_high[i] = 1.f / (1.f + std::exp(-high.data[i]));
+  // Confidence-aware per-frame coverage: sigmoid + RE-OPEN large low-confidence interior negative
+  // space, so PROPAGATE frames (G4) don't re-fill the inter-limb gaps the seed opened. high.data =
+  // G4 pred_masks_high_res logits at 1008². See src/ConfidenceOpen.h.
+  obj.last_high = ConfidenceOpen(high.data.data(), kMImgSize, kMImgSize, kMImgSize, kMImgSize);
   long area = 0; for (float v : low.data) if (v > 0.f) ++area;
   obj.last_area = area;
   return obj.last_low;
