@@ -53,6 +53,14 @@ bool WriteAovExr(const std::string& path, int W, int H,
         chans.push_back(std::move(c));
       }
     }
+    if (a.nref.size() == npix * 3) {
+      static const char* kNref[3] = {"Nref.R", "Nref.G", "Nref.B"};
+      for (int k = 0; k < 3; ++k) {
+        Chan c; c.name = nm + "." + kNref[k]; c.data.resize(npix);
+        for (size_t px = 0; px < npix; ++px) c.data[px] = a.nref[px * 3 + k];
+        chans.push_back(std::move(c));
+      }
+    }
     if (a.depth.size() == npix) {
       Chan c; c.name = nm + ".Z"; c.data = a.depth; chans.push_back(std::move(c));
     }

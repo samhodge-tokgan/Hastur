@@ -983,6 +983,7 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
         result.person_aovs[i].height = H;
         result.person_aovs[i].coverage = std::move(person_aov[i].coverage);
         result.person_aovs[i].pref = std::move(person_aov[i].pref);
+        result.person_aovs[i].nref = std::move(person_aov[i].nref);
         result.person_aovs[i].depth = std::move(person_aov[i].depth);
       }
     }

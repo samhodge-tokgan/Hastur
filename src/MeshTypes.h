@@ -238,6 +238,7 @@ struct PersonAov {
   int width = 0, height = 0;
   std::vector<float> coverage;  // W*H     MHR silhouette alpha [0,1]
   std::vector<float> pref;      // W*H*3   canonical reference position [0,1]
+  std::vector<float> nref;      // W*H*3   canonical bind-pose surface normal (Nref)
   std::vector<float> depth;     // W*H     camera-space body depth (metres)
 };
 
