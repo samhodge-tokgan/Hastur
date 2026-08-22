@@ -63,6 +63,10 @@ struct PipelineParams {
   // Off by default: the OFX layer turns it on only when a non-beauty plane is
   // requested, since it adds per-person data buffers + a second resolve pass.
   bool emit_aovs = false;
+  // Retain per-person {alpha,pref,depth} on FrameResult::person_aovs (needs emit_aovs).
+  // Off by default; hastur_export --emit-mhr turns it on to write the MHR AOV EXR that
+  // Rotobot-Next's topology bridge + depth work consume.
+  bool retain_person_aovs = false;
   int crypto_levels = 2;               // Cryptomatte rank layers (2 ranks each)
 
   // Source of each person's Cryptomatte coverage matte. Mesh (default) keeps the

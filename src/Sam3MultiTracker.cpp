@@ -165,8 +165,12 @@ Sam3MultiTracker::Tensor Sam3MultiTracker::G3(const Tensor& src, const Tensor& s
         mem_info_, const_cast<float*>(t.data.data()), t.data.size(),
         t.shape.data(), t.shape.size()));
   };
-  int64_t scalar_shape[1] = {0};
-  std::vector<int64_t> nopt_val = {n_optr};
+  // num_obj_ptr_tokens is carried as a 1-D int64 tensor whose LENGTH is the pointer-
+  // token count (values unused). The exporter reads .shape[0] so this is a BACKED
+  // dynamic dim in G3.onnx (an unbacked scalar VALUE can't be guarded through the
+  // variable-length-memory rope). See tools/export_sam3_tracker.py::export_g3.
+  int64_t nopt_shape[1] = {n_optr};
+  std::vector<int64_t> nopt_val(static_cast<size_t>(n_optr < 0 ? 0 : n_optr), 0);
   for (const auto& nm : g3_.in_names) {
     if (nm == "src") add("src", src);
     else if (nm == "src_pos") add("src_pos", src_pos);
@@ -175,7 +179,7 @@ Sam3MultiTracker::Tensor Sam3MultiTracker::G3(const Tensor& src, const Tensor& s
     else if (nm == "num_obj_ptr_tokens") {
       names.push_back("num_obj_ptr_tokens");
       ins.push_back(Ort::Value::CreateTensor<int64_t>(
-          mem_info_, nopt_val.data(), 1, scalar_shape, 0));
+          mem_info_, nopt_val.data(), nopt_val.size(), nopt_shape, 1));
     } else throw std::runtime_error("G3 unexpected input " + nm);
   }
   const char* out_names[] = {g3_.out_names[0].c_str()};

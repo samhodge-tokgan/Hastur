@@ -578,6 +578,8 @@ if(HASTUR_WITH_ONNX)
   # hastur_export: headless per-frame Cryptomatte-EXR + skeleton-JSON exporter
   # for the Rotobot-Next golden pipeline (same engine as the plugin + the EXR
   # writer). See tools/hastur_export.cpp.
+  # OpenMP for the scanline-band parallel SoftwareRasterizer (bit-identical output).
+  find_package(OpenMP)
   add_executable(hastur_export
     tools/hastur_export.cpp
     src/DetectorEngine.cpp src/ExternalTracks.cpp src/Skeleton.cpp
@@ -586,13 +588,30 @@ if(HASTUR_WITH_ONNX)
     src/CameraMatrix.cpp src/Cryptomatte.cpp src/LeotardMask.cpp
     src/SurfaceParam.cpp src/OrtSessionManager.cpp src/SoftwareRasterizer.cpp
     src/Sam3dBodyPipeline.cpp src/Sam3TrackerEngine.cpp src/Sam3MultiTracker.cpp
-    src/CryptoExr.cpp src/TinyExrImpl.cpp vendor/miniz.c
+    src/CryptoExr.cpp src/AovExr.cpp src/TinyExrImpl.cpp vendor/miniz.c
     src/MattePartition.cpp src/VoronoiLabel.cpp
   )
   target_include_directories(hastur_export PRIVATE src tools vendor "${eigen_SOURCE_DIR}")
   target_link_libraries(hastur_export PRIVATE onnxruntime ${HASTUR_FS_LIB})
+  if(OpenMP_CXX_FOUND)
+    target_link_libraries(hastur_export PRIVATE OpenMP::OpenMP_CXX)
+  endif()
   if(NOT WIN32)
     set_target_properties(hastur_export PROPERTIES
+      BUILD_RPATH "${ORT_DIR}/lib" INSTALL_RPATH "${ORT_DIR}/lib")
+  endif()
+
+  # hastur_track: headless SAM 3 video tracker (the Sam3TrackerPlugin whole-clip
+  # pre-pass with PNG input) -> external-tracks sidecar (tracks.txt + masks) for
+  # temporally-stable person_NN ids. See tools/hastur_track.cpp.
+  add_executable(hastur_track
+    tools/hastur_track.cpp
+    src/Sam3TrackerEngine.cpp src/Sam3MultiTracker.cpp src/OrtSessionManager.cpp
+  )
+  target_include_directories(hastur_track PRIVATE src tools vendor)
+  target_link_libraries(hastur_track PRIVATE onnxruntime ${HASTUR_FS_LIB})
+  if(NOT WIN32)
+    set_target_properties(hastur_track PROPERTIES
       BUILD_RPATH "${ORT_DIR}/lib" INSTALL_RPATH "${ORT_DIR}/lib")
   endif()
 endif()
