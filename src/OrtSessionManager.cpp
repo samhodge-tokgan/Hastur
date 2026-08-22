@@ -67,9 +67,15 @@ void OrtSessionManager::Handle::Build() {
       OrtCUDAProviderOptions cuda{};
       cuda.device_id = 0;
       cuda.do_copy_in_default_stream = 1;
+      // Tame the two ORT defaults behind the ~37GB "VRAM burst" on the tracker's
+      // fixed-size forwards, for EVERY CUDA session — hastur_track passes no
+      // gpu_mem_limit, so it was getting the untuned defaults: EXHAUSTIVE cudnn
+      // conv-algo search (benchmarks every algo, retaining huge scratch workspaces)
+      // and power-of-two arena growth (overshoots). ~0 quality cost.
+      cuda.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchHeuristic;
+      cuda.arena_extend_strategy = 1;  // kSameAsRequested — no power-of-two overshoot
       if (cfg_.gpu_mem_limit > 0) {
         cuda.gpu_mem_limit = cfg_.gpu_mem_limit;
-        cuda.arena_extend_strategy = 1;  // kSameAsRequested — tighter budget
         if (!impl.cuda_arena_registered) {
           // One shared CUDA arena on the env so every session draws from the
           // same budget rather than each allocating its own.
