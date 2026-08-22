@@ -66,6 +66,7 @@
 #define kParamCryptoExrPath "cryptoExrPath"
 #define kParamCryptoCompression "cryptoCompression"
 #define kParamSkeletonSidecar "skeletonSidecar"
+#define kMpParamPickName "pickName"
 
 // How many person_NN slots the baked candidate manifest enumerates. The input
 // scan maps IDs against this same table, so emitted names are always a subset.
@@ -170,6 +171,7 @@ class MattePartitionPlugin : public OFX::ImageEffect {
     _cryptoExrPath = fetchStringParam(kParamCryptoExrPath);
     _cryptoCompression = fetchChoiceParam(kParamCryptoCompression);
     _skeletonSidecar = fetchStringParam(kParamSkeletonSidecar);
+    _pickName = fetchStringParam(kMpParamPickName);
   }
 
   void render(const OFX::RenderArguments& args) override;
@@ -188,6 +190,7 @@ class MattePartitionPlugin : public OFX::ImageEffect {
   OFX::StringParam* _cryptoExrPath = nullptr;
   OFX::ChoiceParam* _cryptoCompression = nullptr;
   OFX::StringParam* _skeletonSidecar = nullptr;
+  OFX::StringParam* _pickName = nullptr;
 };
 
 namespace {
@@ -367,6 +370,40 @@ bool MattePartitionPlugin::renderPartition(const OFX::RenderArguments& args) {
     }
   }
 
+  // ---- PICK MODE: the pickName param is a 3-way seed selector that decodes coverage
+  // out of the input Cryptomatte into `pool`, then lets the SAME tested partition/emit
+  // path below run. The Colour output is the decoded coverage matte (the seed a
+  // downstream Kthanid needs); on Natron 2.5 only Colour flows node-to-node (its
+  // Color.RGBA-only plane limit) which is exactly that seed. Modes:
+  //   ""          -> normal Voronoi partition (unchanged; Pool = a refined union).
+  //   "person_NN" -> isolate ONE person's coverage  (max-fidelity per-person seed;
+  //                  one Kthanid pass per id -> highest quality, highest cost).
+  //   "*"         -> UNION of every id's coverage    (one big matte -> ONE Kthanid
+  //                  pass for the whole frame; a second MattePartition (mode "") then
+  //                  Voronoi-splits the refined union back per person -> cheapest, and
+  //                  "enough detail" when subjects don't overlap).
+  std::string pickName;
+  if (_pickName) _pickName->getValue(pickName);
+  const bool pickMode = !pickName.empty();
+  const bool unionAll = (pickName == "*");
+  if (pickMode) {
+    std::vector<float> cov(npix, 0.f);
+    const float tgt = unionAll ? 0.f : hastur::CryptoIdFloat(pickName);
+    for (const auto& L : in_layers) {
+      if (L.size() < npix * 4) continue;
+      for (size_t px = 0; px < npix; ++px) {  // two ranks/layer: (R,G) and (B,A)
+        if (unionAll) {                        // union = total matte alpha
+          cov[px] += L[px * 4 + 1] + L[px * 4 + 3];
+        } else {
+          if (IdEquals(L[px * 4 + 0], tgt)) cov[px] += L[px * 4 + 1];
+          if (IdEquals(L[px * 4 + 2], tgt)) cov[px] += L[px * 4 + 3];
+        }
+      }
+    }
+    for (float& v : cov) { if (v < 0.f) v = 0.f; else if (v > 1.f) v = 1.f; }
+    pool = std::move(cov);  // Colour output + partition seed = the picked coverage
+  }
+
   // (2) IDs without an external manifest: scan rank 0 of the front-most input
   // layer for distinct id floats (coverage > seedThresh) and map each to its
   // person_NN via the static person_00..255 table (relative-epsilon match). This
@@ -379,7 +416,13 @@ bool MattePartitionPlugin::renderPartition(const OFX::RenderArguments& args) {
     table.push_back({nm, hastur::CryptoIdFloat(nm)});
   }
   std::vector<hastur::CryptoLabel> ids;
-  if (!in_layers.empty() && in_layers[0].size() >= npix * 4) {
+  if (pickMode && !unionAll) {
+    // Single-id partition: every pooled pixel belongs to the picked person.
+    ids.push_back({pickName, hastur::CryptoIdFloat(pickName)});
+  } else if (pickMode && unionAll) {
+    // Union seed: no per-id partition here (a downstream MattePartition splits the
+    // refined union). Leave ids empty -> emit is the union matte on Colour.
+  } else if (!in_layers.empty() && in_layers[0].size() >= npix * 4) {
     const std::vector<float>& l0 = in_layers[0];
     std::vector<char> seen(table.size(), 0);
     for (size_t px = 0; px < npix; ++px) {
@@ -812,6 +855,23 @@ void MattePartitionFactory::describeInContext(OFX::ImageEffectDescriptor& desc,
                "'hastur/skeleton', so matte + identity + pose ride in one file. "
                "Absent sidecar for a frame = skipped silently.");
     p->setStringType(eStringTypeDirectoryPath);
+    p->setDefault("");
+    page->addChild(*p);
+  }
+  {
+    StringParamDescriptor* p = desc.defineStringParam(kMpParamPickName);
+    p->setLabels("Pick person", "Pick", "Pick Cryptomatte name");
+    p->setHint("PICK MODE -- a per-person seed selector that decodes coverage out of "
+               "the input Cryptomatte into the Colour (RGBA) output, for a minimal "
+               "downstream matting node (e.g. Kthanid) to seed from. Three values: "
+               "empty = normal Voronoi partition (Pool = a refined union); a name "
+               "(e.g. person_00) = isolate ONLY that person's coverage (one matting "
+               "pass per id; highest fidelity, highest cost); '*' = the UNION of all "
+               "ids' coverage (one matting pass for the whole frame, then a second "
+               "Matte Partition in empty mode Voronoi-splits the refined union -- "
+               "cheapest). On Natron 2.5 only the Colour plane flows node-to-node "
+               "(its Color.RGBA-only limit), which is exactly the seed; on Nuke the "
+               "output also carries a valid Cryptomatte.");
     p->setDefault("");
     page->addChild(*p);
   }

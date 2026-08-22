@@ -729,6 +729,12 @@ void Sam3TrackerFactory::describe(OFX::ImageEffectDescriptor& desc) {
 
   desc.setSingleInstance(false);
   desc.setHostFrameThreading(false);
+  // STATEFUL whole-clip pre-pass: forbid the host from cloning/parallelizing this
+  // effect. The default (fully-safe) lets Natron 2.5 spawn per-frame render clones —
+  // and since each clone re-runs the ENTIRE first-render pre-pass (SAM 3 whole-clip
+  // tracking) that is a huge duplicated GPU cost + OOM risk. Unsafe = one render call
+  // at a time on the ORIGINAL instance only, no clones (one pre-pass, one engine).
+  desc.setRenderThreadSafety(OFX::eRenderUnsafe);
   desc.setSupportsMultiResolution(true);
   desc.setSupportsTiles(false);            // the pre-pass needs whole frames
   // The node reads the WHOLE clip in its render pre-pass: temporal clip access at
