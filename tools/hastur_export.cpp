@@ -80,6 +80,13 @@ int main(int argc, char** argv) {
   if (cov && !std::strcmp(cov, "mesh")) coverage = hastur::CryptoCoverage::Mesh;
   else if (cov && !std::strcmp(cov, "sam3")) coverage = hastur::CryptoCoverage::Sam3Mask;
 
+  // Exception firewall: convert an uncaught engine throw into a clean
+  // non-zero exit with a readable message, instead of letting it escape
+  // main → std::terminate → SIGABRT (rc=134), which the platform mislabels
+  // as an infra/relay crash. NOTE: unlike hastur_track, a throw here is a
+  // GENUINE failure (rotobot_next skips this stage entirely on a
+  // zero-person clip), so we return 1, not 0.
+  try {
   hastur::Sam3dBodyPipeline pipe;
   int ok = 0;
   for (int f = first; f <= last; ++f) {
@@ -205,4 +212,14 @@ int main(int argc, char** argv) {
   std::fprintf(stderr, "hastur_export: %d/%d frames written to %s\n", ok,
                last - first + 1, out_dir);
   return ok > 0 ? 0 : 1;
+
+  }  // try
+  catch (const std::exception& e) {
+    std::fprintf(stderr, "[hastur_export] fatal engine exception: %s\n", e.what());
+    return 1;
+  }
+  catch (...) {
+    std::fprintf(stderr, "[hastur_export] fatal unknown engine exception\n");
+    return 1;
+  }
 }
