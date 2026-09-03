@@ -135,6 +135,28 @@ double IouBinLogit(const std::vector<uint8_t>& det, const std::vector<float>& tr
   }
   return uni ? static_cast<double>(inter) / uni : 0.0;
 }
+
+// Write a valid but EMPTY tracks.txt (header only) — the exact form
+// ExternalTracks already tolerates for a clip with 0 detected persons.
+// Used on the zero-detection / engine-throw path so a person-free clip
+// is a clean success, not a crash. Mirrors the header the normal write
+// path emits (tracks.txt:339-343) with no data rows and no ids.
+void writeEmptyTracks(const fs::path& sdir) {
+  std::error_code ec;
+  fs::create_directories(sdir / "masks", ec);
+  std::ofstream tt(sdir / "tracks.txt", std::ios::binary | std::ios::trunc);
+  if (!tt) {
+    std::fprintf(stderr, "[hastur_track] cannot open %s/tracks.txt for empty write\n",
+                 sdir.string().c_str());
+    return;
+  }
+  tt << "# hastur-tracks v1\n";
+  tt << "# ids\n";
+  tt << "# frame track_id x0 y0 x1 y1 mask_relpath\n";
+  tt.flush();
+  std::fprintf(stderr, "[hastur_track] wrote empty %s/tracks.txt (0 persons)\n",
+               sdir.string().c_str());
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -159,6 +181,15 @@ int main(int argc, char** argv) {
   if (last < first) { std::fprintf(stderr, "empty range\n"); return 2; }
   const int N = last - first + 1;
   const long t0 = first;  // plate time of idx 0
+
+  // Exception firewall (mirrors Sam3TrackerPlugin.cpp's "never crash the
+  // host" guard, which the headless port had dropped). A person-free clip
+  // can make the SAM 3 engine throw (e.g. G2 memory graph with 0 seeded
+  // objects); without this the exception escapes main → std::terminate →
+  // SIGABRT (rc=134), which the platform surfaced as a bogus "relay
+  // checkout" crash. Instead: write a valid empty tracks.txt and exit 0 —
+  // "0 persons detected" is a normal outcome, not a failure.
+  try {
 
   // ---- lazily load + convert a frame (idx 0..N-1 -> plate first+idx) to planar
   // CHW, cached for the whole pre-pass (scan/forward/backward revisit frames). ----
@@ -349,5 +380,26 @@ int main(int argc, char** argv) {
   tt.flush();
   std::fprintf(stderr, "[hastur_track] wrote %s/tracks.txt (%zu rows, %zu ids) + masks/\n",
                sdir.string().c_str(), track_rows.size(), ids.size());
-  return track_rows.empty() ? 1 : 0;
+  // An empty-but-successfully-written clip (0 detected persons) is a
+  // SUCCESS, not a failure — the header-only tracks.txt is the valid
+  // empty form ExternalTracks already accepts. (Was `return
+  // track_rows.empty() ? 1 : 0`, which wrongly failed person-free clips.)
+  return 0;
+
+  }  // try
+  catch (const std::exception& e) {
+    std::fprintf(stderr,
+                 "[hastur_track] engine exception (%s) — treating as 0 persons "
+                 "detected; writing empty tracks and exiting 0\n",
+                 e.what());
+    writeEmptyTracks(fs::path(out_dir));
+    return 0;
+  }
+  catch (...) {
+    std::fprintf(stderr,
+                 "[hastur_track] unknown engine exception — treating as 0 persons "
+                 "detected; writing empty tracks and exiting 0\n");
+    writeEmptyTracks(fs::path(out_dir));
+    return 0;
+  }
 }
