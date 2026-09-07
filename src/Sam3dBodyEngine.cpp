@@ -1,6 +1,7 @@
 // Copyright the Hastur authors.
 // SPDX-License-Identifier: LicenseRef-SAM-License
 #include "Sam3dBodyEngine.h"
+#include "ModelBytes.h"
 
 #include <array>
 #include <cstdint>
@@ -145,9 +146,13 @@ Sam3dBodyEngine::Sam3dBodyEngine(const std::string& model_path, ComputeUnits uni
     }
   }
 
+  // Decrypt once and reuse for the CPU retry below; on a sealed tree a second
+  // read would mean decrypting the graph twice on every fallback.
+  const std::string model_bytes = hastur::LoadModelBytes(model_path);
+
   try {
-    impl_->session =
-        std::make_unique<Ort::Session>(impl_->env, OrtPath(model_path).c_str(), so);
+    impl_->session = std::make_unique<Ort::Session>(
+        impl_->env, model_bytes.data(), model_bytes.size(), so);
   } catch (const Ort::Exception& e) {
     // The accelerator EP can fail at session-creation time; retry once on CPU so
     // the plugin still works (slower) instead of failing outright.
@@ -160,7 +165,7 @@ Sam3dBodyEngine::Sam3dBodyEngine(const std::string& model_path, ComputeUnits uni
       used_accel = false;
       try {
         impl_->session = std::make_unique<Ort::Session>(
-            impl_->env, OrtPath(model_path).c_str(), cpu_so);
+            impl_->env, model_bytes.data(), model_bytes.size(), cpu_so);
       } catch (const Ort::Exception& e2) {
         last_error_ = std::string("session create failed: ") + e2.what();
         impl_->session.reset();

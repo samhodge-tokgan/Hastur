@@ -117,6 +117,10 @@ jobs:
           git config --global --add safe.directory '*'
           command -v patchelf >/dev/null 2>&1 || dnf install -y patchelf
           command -v file     >/dev/null 2>&1 || dnf install -y file
+          # Model decryption (#43) needs libcrypto. The manylinux image ships
+          # the runtime but not the headers, so find_package(OpenSSL) fails
+          # here while succeeding on the macOS and Windows runners.
+          test -f /usr/include/openssl/evp.h || dnf install -y openssl-devel
           echo "cmake: $(cmake --version | head -1)"; g++ --version | head -1; patchelf --version
 
       - name: Configure & build (ONNX Runtime CUDA package, Linux)

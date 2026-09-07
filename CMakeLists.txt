@@ -129,6 +129,17 @@ endif()
 # not touch the OpenFX / ONNX-Runtime machinery above. Populate-only (Eigen's own
 # CMake is heavy and unneeded for header-only use).
 # ---------------------------------------------------------------------------
+# Model-weight sealing (#43) parses a small JSON header. Fetched rather than
+# vendored: json.hpp is ~900 KB and this repo already fetches its other
+# header-only dependencies.
+FetchContent_Declare(nlohmann_json
+  GIT_REPOSITORY https://github.com/nlohmann/json.git
+  GIT_TAG v3.11.3
+  GIT_SHALLOW TRUE
+)
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+FetchContent_MakeAvailable(nlohmann_json)
+
 FetchContent_Declare(eigen
   GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
   GIT_TAG 3.4.0
@@ -136,6 +147,26 @@ FetchContent_Declare(eigen
   SOURCE_SUBDIR none-existent-so-populate-only
 )
 FetchContent_MakeAvailable(eigen)
+
+# Model decryption (#43). src/crypto and src/license are VENDORED from
+# Rotobot-Next and must not be edited here — see the banner at the top of each.
+# ModelBytes.cpp carries a decoy-digest check that fails the build if this copy
+# has drifted from the one that seals the artifacts.
+#
+# EVERY target that compiles one of DetectorEngine / Sam3dBodyEngine /
+# HandRefinerEngine / OrtSessionManager / Sam3dBodyPipeline must link this —
+# they all create ORT sessions from buffers now. Currently: Sam3dBody,
+# hastur_track, hastur_export, pipeline_smoke, sam3_tracker_compile. Missing one
+# is an undefined-symbol link error, and the EL8 container build will not catch
+# it because it only builds hastur_track and hastur_export.
+find_package(OpenSSL REQUIRED)
+add_library(hastur_modelcrypt STATIC
+  src/crypto/modelcrypt.cpp
+  src/license/Crypto.cpp
+  src/ModelBytes.cpp)
+target_include_directories(hastur_modelcrypt PUBLIC src)
+target_link_libraries(hastur_modelcrypt PUBLIC OpenSSL::Crypto nlohmann_json::nlohmann_json)
+set_target_properties(hastur_modelcrypt PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # MHR parametric body model: mhr_assets.bin loader + Eigen LBS. Dependency-light
 # (no OFX / ORT), so it builds and unit-tests standalone.
@@ -338,6 +369,9 @@ if(HASTUR_WITH_ONNX)
     src/Sam3TrackerEngine.cpp
     src/Sam3MultiTracker.cpp
   )
+  # Every ORT session in this module is now created from a buffer that
+  # hastur_modelcrypt supplies.
+  target_link_libraries(Sam3dBody PRIVATE hastur_modelcrypt)
   # Cryptomatte.cpp is compiled unconditionally (also used by the Matte Partition
   # plugin above), so it is intentionally NOT listed here.
   # Engine headers live in src/; MhrModel needs the header-only Eigen.
@@ -494,7 +528,7 @@ if(HASTUR_WITH_ONNX)
     src/OrtSessionManager.cpp
   )
   target_include_directories(sam3_tracker_compile PRIVATE src)
-  target_link_libraries(sam3_tracker_compile PRIVATE onnxruntime ${HASTUR_FS_LIB})
+  target_link_libraries(sam3_tracker_compile PRIVATE onnxruntime hastur_modelcrypt ${HASTUR_FS_LIB})
   if(WIN32)
     file(GLOB ORT_ALL_DLLS3 "${ORT_DIR}/lib/*.dll")
     foreach(dll ${ORT_ALL_DLLS3})
@@ -561,7 +595,7 @@ if(HASTUR_WITH_ONNX)
   if(MSVC)
     target_compile_definitions(pipeline_smoke PRIVATE _USE_MATH_DEFINES NOMINMAX)
   endif()
-  target_link_libraries(pipeline_smoke PRIVATE onnxruntime ${HASTUR_FS_LIB})
+  target_link_libraries(pipeline_smoke PRIVATE hastur_modelcrypt onnxruntime ${HASTUR_FS_LIB})
   if(WIN32)
     file(GLOB ORT_ALL_DLLS2 "${ORT_DIR}/lib/*.dll")
     foreach(dll ${ORT_ALL_DLLS2})
@@ -592,7 +626,7 @@ if(HASTUR_WITH_ONNX)
     src/MattePartition.cpp src/VoronoiLabel.cpp
   )
   target_include_directories(hastur_export PRIVATE src tools vendor "${eigen_SOURCE_DIR}")
-  target_link_libraries(hastur_export PRIVATE onnxruntime ${HASTUR_FS_LIB})
+  target_link_libraries(hastur_export PRIVATE onnxruntime hastur_modelcrypt ${HASTUR_FS_LIB})
   if(OpenMP_CXX_FOUND)
     target_link_libraries(hastur_export PRIVATE OpenMP::OpenMP_CXX)
   endif()
@@ -609,7 +643,7 @@ if(HASTUR_WITH_ONNX)
     src/Sam3TrackerEngine.cpp src/Sam3MultiTracker.cpp src/OrtSessionManager.cpp
   )
   target_include_directories(hastur_track PRIVATE src tools vendor)
-  target_link_libraries(hastur_track PRIVATE onnxruntime ${HASTUR_FS_LIB})
+  target_link_libraries(hastur_track PRIVATE onnxruntime hastur_modelcrypt ${HASTUR_FS_LIB})
   if(NOT WIN32)
     set_target_properties(hastur_track PROPERTIES
       BUILD_RPATH "${ORT_DIR}/lib" INSTALL_RPATH "${ORT_DIR}/lib")

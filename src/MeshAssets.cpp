@@ -30,10 +30,20 @@ std::shared_ptr<MeshAssets> MeshAssets::Load(const std::string& path) {
   if (!f) throw std::runtime_error("MeshAssets: cannot open " + path);
   const std::streamsize sz = f.tellg();
   f.seekg(0);
-  auto a = std::make_shared<MeshAssets>();
-  a->raw_.resize(static_cast<size_t>(sz));
-  if (!f.read(reinterpret_cast<char*>(a->raw_.data()), sz))
+  std::string blob(static_cast<size_t>(sz), '\0');
+  if (!f.read(&blob[0], sz))
     throw std::runtime_error("MeshAssets: short read on " + path);
+  return LoadFromBytes(blob, path);
+}
+
+std::shared_ptr<MeshAssets> MeshAssets::LoadFromBytes(const std::string& blob,
+                                                      const std::string& path) {
+  // Split out so a caller holding decrypted bytes (#43) does not have to write
+  // them to disk first — and so hastur_mhr stays free of the crypto, which is
+  // what lets it and its validators build standalone.
+  const std::streamsize sz = static_cast<std::streamsize>(blob.size());
+  auto a = std::make_shared<MeshAssets>();
+  a->raw_.assign(blob.begin(), blob.end());
   if (sz < 12 || std::memcmp(a->raw_.data(), kMagic, 4) != 0)
     throw std::runtime_error("MeshAssets: bad magic in " + path);
 

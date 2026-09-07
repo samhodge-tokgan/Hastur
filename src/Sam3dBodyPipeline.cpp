@@ -1,6 +1,7 @@
 // Copyright the Hastur authors.
 // SPDX-License-Identifier: LicenseRef-SAM-License
 #include "Sam3dBodyPipeline.h"
+#include "ModelBytes.h"
 
 #include <algorithm>
 #include <array>
@@ -362,7 +363,10 @@ bool Sam3dBodyPipeline::EnsureLoaded(const PipelineParams& p) {
     if (!det_path.empty())
       s.det = std::make_unique<DetectorEngine>(det_path, p.units, p.intra_threads);
     s.body = std::make_unique<Sam3dBodyEngine>(body_path, p.units, p.intra_threads);
-    s.assets = MeshAssets::Load(assets_path);
+    // mhr_assets.bin is a shipped model asset and is sealed with the rest, so
+    // it is read through the same path-to-bytes helper as the graphs.
+    s.assets = MeshAssets::LoadFromBytes(hastur::LoadModelBytes(assets_path),
+                                         assets_path);
     s.mhr = std::make_unique<MhrModel>(s.assets);
 
     // Pose-corrective: dense fp32 matmul — run it on CPU (fast, avoids a
