@@ -42,6 +42,7 @@
 #include <vector>
 
 #include "ofxsImageEffect.h"
+#include "ModelBytes.h"
 #include "ofxsProcessing.H"
 
 #include "Register.h"
@@ -184,9 +185,28 @@ std::string T3ResolveModelDir(const std::string& param_dir) {
 
 // Build the engine's MultiPaths (absolute file paths) from a resolved model dir.
 // File names match the exported SAM 3 asset set the engine + validate driver use.
+// Every file the tracker group needs. A sealed tree has no readable listing —
+// the names on disk are HMACs — so materialisation has to be told. The .data
+// sidecars are the reason this group cannot be loaded from buffers at all.
+const std::vector<std::string>& Sam3TrackerFiles() {
+  static const std::vector<std::string> f = {
+      "G1.onnx", "G1.onnx.data", "G2.onnx", "G2.onnx.data",
+      "G3.onnx", "G3.onnx.data", "G4.onnx", "G4.onnx.data",
+      "G5.onnx", "G5.onnx.data",
+      "const_maskmem_tpos_enc.npy", "const_no_mem_embed.npy",
+      "const_objptr_tpos_proj_w.npy", "const_objptr_tpos_proj_b.npy",
+      "const_lang_feats_person.npy", "const_lang_mask_person.npy",
+  };
+  return f;
+}
+
 hastur::MultiPaths T3BuildPaths(const std::string& dir) {
+  // Sealed trees decrypt into a RAM-backed directory first; a plaintext tree
+  // comes back unchanged. Every path below is built off the result, so nothing
+  // downstream needs to know which it got.
+  const std::string resolved = hastur::MaterialiseModelDir(dir, Sam3TrackerFiles());
   namespace fs = std::filesystem;
-  const fs::path d(dir);
+  const fs::path d(resolved);
   hastur::MultiPaths p;
   p.g1 = (d / "G1.onnx").string();
   p.g2 = (d / "G2.onnx").string();

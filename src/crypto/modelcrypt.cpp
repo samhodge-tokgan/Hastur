@@ -311,12 +311,38 @@ bool SealedTree::materialise(const std::vector<std::string>& logicals,
   if (!sealed_) { dir_out = dir_; return true; }
   if (!scratch_.empty()) { dir_out = scratch_; return true; }
 
-  // RAM-backed: plaintext weights must not touch a disk. /dev/shm defaults to
-  // 64 MB inside a container, and the tracker's external-data blob is ~2 GB, so
-  // a pod without an explicit memory-backed volume fails here — deliberately
-  // loudly, because the alternative is silently spilling weights to disk.
+  // RAM-backed, or not at all. The first draft of this fell back to
+  // temp_directory_path() when /dev/shm was absent, which silently wrote
+  // plaintext weights to a disk — the exact thing the feature exists to
+  // prevent, on exactly the platforms (macOS, Windows) where the fallback
+  // would fire. Refuse instead, and say why.
+  //
+  // /dev/shm is also only 64 MB inside a container by default, and the
+  // tracker's external data is ~2 GB, so a pod without a memory-backed volume
+  // fails below rather than here. That failure is deliberate too.
   std::error_code ec;
-  const std::string base = fs::exists("/dev/shm", ec) ? "/dev/shm" : fs::temp_directory_path(ec).string();
+  std::string base;
+  if (fs::exists("/dev/shm", ec)) {
+    base = "/dev/shm";
+  } else if (std::getenv("ROTOBOT_MODELS_ALLOW_DISK_SCRATCH")) {
+    base = fs::temp_directory_path(ec).string();
+    std::fprintf(stderr,
+                 "[modelcrypt] WARNING: no /dev/shm; decrypting models to %s, "
+                 "which is a DISK. Plaintext weights will exist as files until "
+                 "this process exits. Set by "
+                 "ROTOBOT_MODELS_ALLOW_DISK_SCRATCH.\n",
+                 base.c_str());
+  } else {
+    err = "this model tree needs a RAM-backed scratch directory and there is no "
+          "/dev/shm on this platform.\n"
+          "  Models with external data cannot be loaded from memory (ORT cannot "
+          "resolve an .onnx.data sidecar from a buffer), so they are decrypted "
+          "to tmpfs instead.\n"
+          "  Sealed model trees are a Linux feature today; use an unsealed tree "
+          "here, or set ROTOBOT_MODELS_ALLOW_DISK_SCRATCH=1 to accept plaintext "
+          "weights on disk for the life of the process.";
+    return false;
+  }
   std::random_device rd;
   scratch_ = base + "/.rbm-" + h(sha256(std::to_string(rd()) + dir_)).substr(0, 16);
   if (!fs::create_directory(scratch_, ec)) {

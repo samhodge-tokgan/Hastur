@@ -1,7 +1,7 @@
 // Copyright the Hastur authors.
 // SPDX-License-Identifier: LicenseRef-SAM-License
 #include "OrtSessionManager.h"
-#include "ModelBytes.h"
+#include "OrtModelLoad.h"
 
 #include <stdexcept>
 
@@ -100,13 +100,8 @@ void OrtSessionManager::Handle::Build() {
     }
   }
 
-  // Read once, reuse for the retry below: on a sealed tree this is a decrypt,
-  // and doing it twice would double the cost of every CPU fallback.
-  const std::string model_bytes = LoadModelBytes(cfg_.model_path);
-
   try {
-    session_ = std::make_unique<Ort::Session>(
-        impl.env, model_bytes.data(), model_bytes.size(), so);
+    session_ = MakeModelSession(impl.env, cfg_.model_path, so);
     accelerator_active_ = appended_accel;
     return;
   } catch (const Ort::Exception& e) {
@@ -121,8 +116,7 @@ void OrtSessionManager::Handle::Build() {
   }
 
   Ort::SessionOptions cpu_so = BaseOptions(cfg_);
-  session_ = std::make_unique<Ort::Session>(
-      impl.env, model_bytes.data(), model_bytes.size(), cpu_so);
+  session_ = MakeModelSession(impl.env, cfg_.model_path, cpu_so);
   accelerator_active_ = false;
 }
 
