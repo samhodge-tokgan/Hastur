@@ -112,11 +112,17 @@ std::vector<std::string> SearchDirs(const std::string& model_dir) {
 }
 
 // First existing `dir/name` across the search dirs, else empty.
+//
+// Asks ModelExists rather than std::filesystem::exists: in a sealed tree (#43)
+// the files on disk are named by HMAC, so nothing is called
+// "sam3dbody_body.onnx" and a plain exists() finds NOTHING. Every path then
+// came back empty and the pipeline ran with no engines at all — reporting
+// "0 people" on every frame, creating no ORT session, and exiting 0. A silent
+// wrong answer, which is worse than the crash it looks nothing like.
 std::string FindFile(const std::vector<std::string>& dirs, const std::string& name) {
   for (const std::string& d : dirs) {
-    std::error_code ec;
-    fs::path p = fs::path(d) / name;
-    if (fs::exists(p, ec)) return p.string();
+    const std::string p = (fs::path(d) / name).string();
+    if (hastur::ModelExists(p)) return p;
   }
   return {};
 }
