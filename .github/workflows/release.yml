@@ -59,6 +59,9 @@ jobs:
           command -v patchelf >/dev/null 2>&1 || dnf install -y patchelf
           command -v file     >/dev/null 2>&1 || dnf install -y file
           command -v xz       >/dev/null 2>&1 || dnf install -y xz
+          # Same as ci.yml: model decryption (#43) needs libcrypto headers,
+          # which the manylinux image does not ship.
+          test -f /usr/include/openssl/evp.h || dnf install -y openssl-devel
           echo "cmake: $(cmake --version | head -1)"; g++ --version | head -1; patchelf --version
 
       # --- Configure & build the MODEL-LESS bundle (no model files; matches ci.yml) ---

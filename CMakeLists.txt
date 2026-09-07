@@ -152,6 +152,13 @@ FetchContent_MakeAvailable(eigen)
 # Rotobot-Next and must not be edited here — see the banner at the top of each.
 # ModelBytes.cpp carries a decoy-digest check that fails the build if this copy
 # has drifted from the one that seals the artifacts.
+#
+# EVERY target that compiles one of DetectorEngine / Sam3dBodyEngine /
+# HandRefinerEngine / OrtSessionManager / Sam3dBodyPipeline must link this —
+# they all create ORT sessions from buffers now. Currently: Sam3dBody,
+# hastur_track, hastur_export, pipeline_smoke, sam3_tracker_compile. Missing one
+# is an undefined-symbol link error, and the EL8 container build will not catch
+# it because it only builds hastur_track and hastur_export.
 find_package(OpenSSL REQUIRED)
 add_library(hastur_modelcrypt STATIC
   src/crypto/modelcrypt.cpp
@@ -521,7 +528,7 @@ if(HASTUR_WITH_ONNX)
     src/OrtSessionManager.cpp
   )
   target_include_directories(sam3_tracker_compile PRIVATE src)
-  target_link_libraries(sam3_tracker_compile PRIVATE onnxruntime ${HASTUR_FS_LIB})
+  target_link_libraries(sam3_tracker_compile PRIVATE onnxruntime hastur_modelcrypt ${HASTUR_FS_LIB})
   if(WIN32)
     file(GLOB ORT_ALL_DLLS3 "${ORT_DIR}/lib/*.dll")
     foreach(dll ${ORT_ALL_DLLS3})
@@ -588,7 +595,7 @@ if(HASTUR_WITH_ONNX)
   if(MSVC)
     target_compile_definitions(pipeline_smoke PRIVATE _USE_MATH_DEFINES NOMINMAX)
   endif()
-  target_link_libraries(pipeline_smoke PRIVATE onnxruntime ${HASTUR_FS_LIB})
+  target_link_libraries(pipeline_smoke PRIVATE hastur_modelcrypt onnxruntime ${HASTUR_FS_LIB})
   if(WIN32)
     file(GLOB ORT_ALL_DLLS2 "${ORT_DIR}/lib/*.dll")
     foreach(dll ${ORT_ALL_DLLS2})

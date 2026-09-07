@@ -304,7 +304,14 @@ bool parse_iso8601_utc(const std::string& s, int64_t& out_epoch) {
   tm.tm_hour = h;
   tm.tm_min = mi;
   tm.tm_sec = sec;
-  const time_t t = timegm(&tm);  // UTC, unaffected by TZ (unlike mktime)
+  // UTC, unaffected by TZ (unlike mktime). timegm is POSIX; MSVC spells it
+  // _mkgmtime. This file is vendored into Hastur, which builds on Windows and
+  // macOS as well as Linux, so it cannot assume a POSIX-only name.
+#if defined(_WIN32)
+  const time_t t = _mkgmtime(&tm);
+#else
+  const time_t t = timegm(&tm);
+#endif
   if (t == (time_t)-1) return false;
   out_epoch = (int64_t)t;
   return true;
