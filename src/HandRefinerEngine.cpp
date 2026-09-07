@@ -1,6 +1,7 @@
 // Copyright the Hastur authors.
 // SPDX-License-Identifier: LicenseRef-SAM-License
 #include "HandRefinerEngine.h"
+#include "ModelBytes.h"
 
 #include <array>
 #include <cstdint>
@@ -136,9 +137,13 @@ HandRefinerEngine::HandRefinerEngine(const std::string& model_path,
     }
   }
 
+  // Decrypt once and reuse for the CPU retry below; on a sealed tree a second
+  // read would mean decrypting the graph twice on every fallback.
+  const std::string model_bytes = hastur::LoadModelBytes(model_path);
+
   try {
-    impl_->session =
-        std::make_unique<Ort::Session>(impl_->env, OrtPath(model_path).c_str(), so);
+    impl_->session = std::make_unique<Ort::Session>(
+        impl_->env, model_bytes.data(), model_bytes.size(), so);
   } catch (const Ort::Exception& e) {
     if (used_accel) {
       last_error_ = std::string(AcceleratorSubstr()) +
@@ -149,7 +154,7 @@ HandRefinerEngine::HandRefinerEngine(const std::string& model_path,
       used_accel = false;
       try {
         impl_->session = std::make_unique<Ort::Session>(
-            impl_->env, OrtPath(model_path).c_str(), cpu_so);
+            impl_->env, model_bytes.data(), model_bytes.size(), cpu_so);
       } catch (const Ort::Exception& e2) {
         last_error_ = std::string("session create failed: ") + e2.what();
         impl_->session.reset();

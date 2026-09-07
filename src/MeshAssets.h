@@ -37,6 +37,11 @@ class MeshAssets {
 
   // Loads and validates the binary. Throws std::runtime_error on failure.
   static std::shared_ptr<MeshAssets> Load(const std::string& path);
+  // Same, from bytes already in memory. `path` is used only for error text.
+  // Exists so a sealed-tree caller can hand over a decrypted buffer without
+  // this library needing to know anything about encryption.
+  static std::shared_ptr<MeshAssets> LoadFromBytes(const std::string& blob,
+                                                   const std::string& path);
 
   // Typed accessors (throw if missing / wrong dtype).
   const float* f32(const std::string& name) const;
