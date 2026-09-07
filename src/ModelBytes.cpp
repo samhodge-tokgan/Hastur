@@ -98,4 +98,21 @@ bool ModelExists(const std::string& model_path) {
   }
 }
 
+bool ModelOnDisk(const std::string& model_path) {
+  std::error_code ec;
+  return fs::is_regular_file(model_path, ec);
+}
+
+std::string MaterialiseModelDir(const std::string& model_dir,
+                               const std::vector<std::string>& logicals) {
+  auto t = tree_for(model_dir);
+  if (!t->sealed()) return model_dir;
+  std::string out, err;
+  if (!t->materialise(logicals, out, err)) throw std::runtime_error("hastur: " + err);
+  // The SealedTree stays in the per-directory cache for the life of the
+  // process, which is what keeps the scratch directory alive while sessions
+  // hold it open — and what shreds it at exit.
+  return out;
+}
+
 }  // namespace hastur

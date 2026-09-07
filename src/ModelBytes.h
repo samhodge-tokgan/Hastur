@@ -13,6 +13,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace hastur {
 
@@ -28,8 +29,33 @@ std::string LoadModelBytes(const std::string& model_path);
 // probe for an optional variant, which cannot work against derived names.
 bool ModelExists(const std::string& model_path);
 
-// NOTE: models with external data (.onnx.data) cannot use LoadModelBytes —
-// CreateSessionFromArray cannot resolve the sidecar. Those need a materialised
-// directory, which lands with the tracker in phase 4. Nothing here loads one.
+// Resolve a model directory to one ORT can open BY PATH, decrypting if sealed.
+//
+// Needed for models with external data (.onnx.data): ORT resolves the sidecar
+// by name at session-create time, and CreateSessionFromArray cannot do that at
+// all — so the tracker cannot use LoadModelBytes.
+//
+// `logicals` names every file the group needs, because a sealed tree has no
+// readable listing: the names on disk are HMACs. On a plaintext tree this
+// returns the directory unchanged.
+//
+// The returned directory is RAM-backed (/dev/shm) and is shredded when the
+// process exits. It is NOT created on a platform without /dev/shm — writing
+// plaintext weights to a disk would defeat the point — so sealed trees with
+// external data are a Linux feature today. Plaintext trees work everywhere.
+std::string MaterialiseModelDir(const std::string& model_dir,
+                                const std::vector<std::string>& logicals);
+
+// Is there a real file at `model_path` that ORT can open directly?
+//
+// True for a plaintext tree and for a materialised directory; false for a
+// sealed single-file model, whose bytes only exist once decrypted.
+//
+// This decides HOW a session is created, and it is not cosmetic: ORT resolves
+// an .onnx.data sidecar RELATIVE TO THE MODEL FILE, and refuses outright for a
+// model loaded from a buffer ("External data path for model loaded from bytes
+// escapes working directory"). So anything with external data must go through
+// a real path, which is what MaterialiseModelDir provides.
+bool ModelOnDisk(const std::string& model_path);
 
 }  // namespace hastur
