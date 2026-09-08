@@ -178,7 +178,9 @@ std::string T3ResolveModelDir(const std::string& param_dir) {
 
   std::error_code ec;
   for (const std::string& d : cands)
-    if (fs::exists(fs::path(d) / "G1.onnx", ec)) return d;
+    // ModelExists, not fs::exists: a sealed tracker tree has no file called
+    // G1.onnx, so this probe would reject the very directory it is looking for.
+    if (hastur::ModelExists((fs::path(d) / "G1.onnx").string())) return d;
   if (!cands.empty()) return cands.front();
   return param_dir;
 }
