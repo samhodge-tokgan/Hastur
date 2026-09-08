@@ -78,8 +78,14 @@ std::string decoy_digest_hex();
 
 // PMS out of a licence's metadata.model_pms for `generation`. Returns empty on
 // any failure — a wrong licence_key, an absent generation, a corrupt envelope.
+// `why`, when non-null, receives a short reason on failure. Every failure here
+// returns the same empty Key, and the caller used to guess at the cause — it
+// reported "carries no key for generation X" whether the licence was
+// unreadable, carried no model-key metadata at all, or carried a different
+// generation. Those need different fixes, and guessing sent a real
+// investigation a long way in the wrong direction (2026-09-08).
 Key unwrap_pms(const std::string& licence_text, const std::string& licence_key,
-               const std::string& generation);
+               const std::string& generation, std::string* why = nullptr);
 
 // CK out of a sealed.hdr. `artifact` binds the wrap to one artifact version, so
 // a header lifted between releases does not open.

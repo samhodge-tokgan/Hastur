@@ -112,36 +112,87 @@ bool Sealed::from_json(const std::string& json, Sealed& out) {
 // --------------------------------------------------------------------------
 
 Key unwrap_pms(const std::string& licence_text, const std::string& licence_key,
-               const std::string& generation) {
+               const std::string& generation, std::string* why) {
+  // Say WHY on every failure path. These all return the same empty Key, and the
+  // caller cannot tell them apart — so it used to assert the last one, which is
+  // how "the vendored copy is looking for a metadata key Keygen renamed" got
+  // reported to a customer as "ask Tokgan to re-issue the licence".
+  const auto fail = [&](const char* reason) -> Key {
+    if (why) *why = reason;
+    return Key();
+  };
   // The licence payload: strip the envelope, base64, then the AES-GCM segment
   // keyed by SHA256(licence_key) — the same shape verify_offline() reads.
   const std::string body_b64 = license::strip_envelope(licence_text);
   std::string body;
-  if (!license::b64_decode(body_b64, body)) return Key();
+  if (!license::b64_decode(body_b64, body)) return fail("the licence file is not valid base64");
   nlohmann::json payload, doc;
-  try { payload = nlohmann::json::parse(body); } catch (...) { return Key(); }
+  try { payload = nlohmann::json::parse(body); }
+  catch (...) { return fail("the licence file is not valid JSON"); }
   const std::string enc = payload.value("enc", "");
   const size_t d1 = enc.find('.'), d2 = enc.rfind('.');
-  if (d1 == std::string::npos || d1 == d2) return Key();
+  if (d1 == std::string::npos || d1 == d2) return fail("the licence envelope is malformed");
   std::string ct, iv, tag, plain;
   if (!license::b64_decode(enc.substr(0, d1), ct) ||
       !license::b64_decode(enc.substr(d1 + 1, d2 - d1 - 1), iv) ||
       !license::b64_decode(enc.substr(d2 + 1), tag) ||
       !aes256gcm_decrypt(sha256(licence_key), iv, ct, tag, plain)) {
-    return Key();
+    return fail("the licence did not decrypt — the .key file does not match the .lic");
   }
-  try { doc = nlohmann::json::parse(plain); } catch (...) { return Key(); }
+  try { doc = nlohmann::json::parse(plain); }
+  catch (...) { return fail("the decrypted licence payload is not JSON"); }
 
   const auto meta = doc.value("data", nlohmann::json::object())
                         .value("attributes", nlohmann::json::object())
                         .value("metadata", nlohmann::json::object());
-  if (!meta.contains("model_pms")) return Key();
-  const auto& gens = meta["model_pms"];
-  if (!gens.is_object() || !gens.contains(generation)) return Key();
+  // Keygen REWRITES METADATA KEY NAMES. Verified against a real minted licence:
+  // "model_pms" came back as "modelPms", and the nested "gen-2026" came back as
+  // "gen2026" — it camelCases the whole key tree, separators and all.
+  //
+  // So the value is carried as ONE opaque base64url string under one key.
+  // Keygen rewrites keys; it does not touch values. That makes the format
+  // immune to whatever any licence server decides to do to our field names,
+  // rather than us chasing each transformation as we discover it.
+  //
+  // The object form is still accepted, for a self-hosted CE relay that
+  // round-trips metadata unchanged and for licences issued before this.
+  const char* key_name = meta.contains("model_pms") ? "model_pms"
+                       : meta.contains("modelPms")  ? "modelPms"
+                                                    : nullptr;
+  if (!key_name)
+    return fail("the licence carries no model-key metadata at all — it was issued "
+                "without --model-pms-hex");
+
+  nlohmann::json gens;
+  const auto& raw = meta[key_name];
+  if (raw.is_string()) {
+    std::string decoded;
+    if (!license::b64url_decode(raw.get<std::string>(), decoded))
+      return fail("the licence's model-key metadata is not valid base64url");
+    try { gens = nlohmann::json::parse(decoded); }
+    catch (...) { return fail("the licence's model-key metadata is not valid JSON"); }
+  } else {
+    gens = raw;
+  }
+  if (!gens.is_object()) return fail("the licence's model-key metadata is not an object");
+  if (!gens.contains(generation)) {
+    // Name what the licence DOES carry. A mismatch here is a real re-issue; the
+    // list is what tells the two apart without a second round trip.
+    std::string have;
+    for (auto it = gens.begin(); it != gens.end(); ++it) {
+      if (!have.empty()) have += ", ";
+      have += it.key();
+    }
+    if (why)
+      *why = "the licence carries generation(s) [" + (have.empty() ? std::string("none") : have) +
+             "] but the models need '" + generation + "'";
+    return Key();
+  }
 
   Sealed s;
   const auto& g = gens[generation];
-  if (!Sealed::from_json(g.is_string() ? g.get<std::string>() : g.dump(), s)) return Key();
+  if (!Sealed::from_json(g.is_string() ? g.get<std::string>() : g.dump(), s))
+    return fail("the licence's wrapped model key is malformed");
 
   // Wrapped under SHA256(licence_key) XOR decoy_material(): a leaked .lic alone
   // does not unwrap without the constants compiled into the binary.
@@ -150,7 +201,8 @@ Key unwrap_pms(const std::string& licence_text, const std::string& licence_key,
   for (size_t i = 0; i < wrap.size() && i < decoy.size(); ++i) wrap[i] ^= decoy[i];
 
   std::string pms;
-  if (!aes256gcm_decrypt(wrap, s.iv, s.ct, s.tag, pms) || pms.size() != 32) return Key();
+  if (!aes256gcm_decrypt(wrap, s.iv, s.ct, s.tag, pms) || pms.size() != 32)
+    return fail("the licence's wrapped model key did not decrypt");
   return pms;
 }
 
@@ -218,8 +270,23 @@ std::unique_ptr<SealedTree> SealedTree::open(const std::string& dir,
   const std::string hdr_path = dir + "/" + kHeaderName;
   std::error_code ec;
   if (!fs::exists(hdr_path, ec)) {
-    t->sealed_ = false;  // plaintext tree — the pre-#43 layout, still supported
+    // Plaintext tree — the pre-#43 layout. Accepting it is what lets the sealed
+    // rollout land one loader at a time and roll back by shipping the old
+    // models, so it is supported deliberately rather than by omission.
+    //
+    // A product build compiled with ROTOBOT_REQUIRE_SEALED_MODELS refuses it:
+    // once every path is proven, shipping a binary that would happily load
+    // unencrypted weights is a way to ship the feature and not have it.
+#if defined(ROTOBOT_REQUIRE_SEALED_MODELS)
+    err = "the model tree at " + dir +
+          " is not encrypted, and this build requires encrypted models.\n"
+          "  Stage it with: stage_models.sh <out> --seal --pms-hex <PMS> "
+          "--artifact <version> --generation <gen>";
+    return nullptr;
+#else
+    t->sealed_ = false;
     return t;
+#endif
   }
 
   Header hdr;
@@ -236,12 +303,11 @@ std::unique_ptr<SealedTree> SealedTree::open(const std::string& dir,
           "unencrypted model tree.";
     return nullptr;
   }
-  const Key pms = unwrap_pms(licence_text, licence_key, hdr.generation);
+  std::string why;
+  const Key pms = unwrap_pms(licence_text, licence_key, hdr.generation, &why);
   if (pms.empty()) {
-    err = "this licence cannot open the model tree at " + dir +
-          ": it carries no key for generation '" + hdr.generation +
-          "'.\n  The models were sealed for a different licence generation — ask "
-          "Tokgan to re-issue.";
+    err = "this licence cannot open the model tree at " + dir + ":\n  " +
+          (why.empty() ? std::string("the model key could not be unwrapped") : why) + ".";
     return nullptr;
   }
   t->ck_ = unwrap_content_key(hdr.enc_ck, pms, hdr.artifact);
