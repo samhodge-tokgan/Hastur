@@ -106,6 +106,10 @@ int main(int argc, char** argv) {
   hastur::Sam3dBodyPipeline pipe;
   hastur::FrameResult fr = pipe.Run(rgb.data(), fw, fh, p);
 
+  if (!fr.ok) {
+    std::fprintf(stderr, "pipeline could not run (%s)\n", pipe.last_error().c_str());
+    return 3;
+  }
   if (static_cast<int>(fr.render.data.size()) != fw * fh * 4) {
     std::fprintf(stderr, "pipeline produced no render (%s)\n",
                  pipe.last_error().c_str());

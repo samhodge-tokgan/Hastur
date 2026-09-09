@@ -776,7 +776,8 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
   if (dets.empty()) {
     last_error_ =
         p.use_external_tracks ? "no tracks for this frame" : "no persons detected";
-    return result;  // valid (empty) frame; host passes source through
+    result.ok = true;  // we LOOKED and there was nobody — a valid empty frame
+    return result;     // host passes source through
   }
 
   // External tracks carry their own (already de-duplicated) person set, so the
@@ -866,6 +867,7 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
 
   if (result.people.empty()) {
     last_error_ = "no person meshes produced";
+    result.ok = true;  // the pipeline ran; it just produced no meshes
     return result;
   }
 
@@ -1066,6 +1068,7 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
   }
 
   last_error_.clear();
+  result.ok = true;
   return result;
 }
 

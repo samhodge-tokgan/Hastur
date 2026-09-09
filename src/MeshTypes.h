@@ -243,6 +243,19 @@ struct PersonAov {
 };
 
 struct FrameResult {
+  // Did the pipeline actually RUN? This is NOT "did it find anyone" —
+  // `people.empty()` answers that, and an empty frame is a valid result.
+  //
+  // `ok == false` means we could not look at all: models missing, no detector,
+  // a bad input frame. Run() returns a correctly-sized blank render in that
+  // case, so a caller inspecting only the render cannot tell the two apart —
+  // which is how a sealed model tree that would not open was reported to a
+  // customer as "0 people" on every frame, with exit 0 (2026-09-08).
+  //
+  // Defaults to FALSE deliberately: an early return added here later reads as
+  // "did not run" and fails loudly, rather than silently claiming an empty
+  // frame. Every path that genuinely looked sets it true.
+  bool ok = false;
   std::vector<PersonResult> people;  // depth-ordered for over-composite
   RgbaImage render;                  // grey mesh(es) + coverage alpha
   // AOV extensions (append-only; populated only when AOV emission is requested).
