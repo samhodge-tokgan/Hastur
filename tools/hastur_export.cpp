@@ -123,6 +123,25 @@ int main(int argc, char** argv) {
     }
 
     hastur::FrameResult fr = pipe.Run(rgb.data(), W, H, p);
+    // COULD NOT LOOK is not the same as FOUND NOBODY, and this is the exact
+    // spot where the two used to be indistinguishable. Run() returns a
+    // correctly-sized blank render when the models will not load, so the
+    // render-size guard below never fired: a sealed model tree that would not
+    // open produced "0 people" on every frame and exit 0, and a customer read
+    // that as "there is nobody in this footage" (2026-09-08).
+    //
+    // Fail on the FIRST frame, not the 48th. Whatever is wrong is a setup
+    // problem and it will be wrong for every frame; printing it once and
+    // stopping is the difference between a diagnosis and a wall of text.
+    if (!fr.ok) {
+      std::fprintf(stderr,
+                   "hastur_export: the pipeline could not run on frame %d: %s\n"
+                   "  This is a setup failure, not an empty frame. Check the model\n"
+                   "  directory and, for encrypted models, the licence:\n"
+                   "    rotobot_next --check-models\n",
+                   f, pipe.last_error().c_str());
+      return 3;
+    }
     if (static_cast<int>(fr.render.data.size()) != W * H * 4) {
       std::fprintf(stderr, "frame %d: pipeline produced no render (%s)\n", f,
                    pipe.last_error().c_str());

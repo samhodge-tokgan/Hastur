@@ -102,8 +102,9 @@ int main(int argc, char** argv) {
   hastur::Sam3dBodyPipeline pipe;
   hastur::FrameResult fr = pipe.Run(rgb.data(), W, H, p);
 
-  std::fprintf(stderr, "people detected/meshed: %zu   last_error: '%s'\n",
-               fr.people.size(), pipe.last_error().c_str());
+  std::fprintf(stderr, "people detected/meshed: %zu   ran=%s   last_error: '%s'\n",
+               fr.people.size(), fr.ok ? "yes" : "NO (setup failure, not an empty frame)",
+               pipe.last_error().c_str());
   for (size_t i = 0; i < fr.people.size(); ++i) {
     const auto& pr = fr.people[i];
     std::fprintf(stderr,

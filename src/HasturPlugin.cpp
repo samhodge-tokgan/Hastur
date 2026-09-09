@@ -640,6 +640,18 @@ bool Sam3dBodyPlugin::renderPipeline(const OFX::RenderArguments& args) {
       }
       auto computed = std::make_shared<hastur::FrameResult>(
           _pipeline->Run(rgb.data(), W, H, p));
+      // Could not look at all — models missing, or encrypted and unopenable.
+      // Tell the artist. Without this it falls through to the pass-through
+      // branch below and the plate comes out unchanged with no message, which
+      // in a host looks like "the plugin found nobody" rather than "the plugin
+      // never ran". Same confusion that reached a customer on 2026-09-08.
+      if (!computed->ok) {
+        hasturreg::SafeSetMessage(*this, OFX::Message::eMessageError,
+                                  "hasturPipeline",
+                                  "SAM 3D Body could not run: " +
+                                      _pipeline->last_error());
+        return false;
+      }
       if (static_cast<int>(computed->render.data.size()) != W * H * 4) {
         if (!_pipeline->ok())
           hasturreg::SafeSetMessage(*this, OFX::Message::eMessageError,
