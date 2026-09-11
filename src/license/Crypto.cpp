@@ -12,6 +12,7 @@
 // ============================================================================
 // SPDX-License-Identifier: LicenseRef-Tokgan-Proprietary
 // Copyright (c) Tokgan. Proprietary — licensed under the Tokgan EULA; see NOTICE.
+#include <fstream>
 #include "license/Crypto.h"
 
 #include <cstdio>
@@ -76,6 +77,31 @@ std::string strip(const std::string& s) {
   size_t a = s.find_first_not_of(" \t\r\n");
   size_t b = s.find_last_not_of(" \t\r\n");
   return (a == std::string::npos) ? "" : s.substr(a, b - a + 1);
+}
+
+std::string diagnose_license_key(const std::string& key) {
+  if (key.empty()) return "";
+  // A Keygen key is groups of uppercase hex-ish characters joined by '-'. It
+  // never contains a '/', so one is decisive -- no guessing, no heuristics on
+  // length or shape that could reject a future key format.
+  if (key.find('/') == std::string::npos) return "";
+  std::string why =
+      "ROTOBOT_NEXT_LICENSE_KEY looks like a PATH, not a key.\n"
+      "  It takes the licence key itself (e.g. ABC123-DEF456-...), and the\n"
+      "  value given contains '/'.\n";
+  std::ifstream f(key);
+  if (f) {
+    why += "  The file it names does exist -- you probably meant to let the\n"
+           "  sibling <licence>.key be read automatically. UNSET the variable:\n"
+           "    unset ROTOBOT_NEXT_LICENSE_KEY\n"
+           "  It is only consulted when empty, so with it set the file is\n"
+           "  never opened and the path string becomes the decryption key.";
+  } else {
+    why += "  Nothing exists at that path either. Set it to the key, or unset\n"
+           "  it and put the key in a file beside the licence named\n"
+           "  <licence>.key.";
+  }
+  return why;
 }
 
 bool b64_decode(const std::string& in, std::string& out) {

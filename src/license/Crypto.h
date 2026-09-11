@@ -31,6 +31,17 @@ namespace license {
 // ---- text ----
 std::string strip(const std::string& s);
 
+// Is ROTOBOT_NEXT_LICENSE_KEY holding a PATH instead of a key? Returns a
+// diagnostic, or "" when the value looks like a key.
+//
+// The variable takes the key ITSELF (`F99C5B-AB38D6-...`), and the sibling
+// `<licence>.key` FILE is read only when it is empty. Setting it to the path of
+// that file therefore makes the literal path string the AES key, and the
+// failure is `AES-GCM decrypt failed (wrong key or tampered)` -- which sends
+// the operator hunting for a corrupt licence or a mismatched pair. Observed on
+// the rocky8 install, 2026-09-11.
+std::string diagnose_license_key(const std::string& key);
+
 // ---- encoding ----
 // Was decode-only until model sealing (#43) needed to WRITE an envelope.
 // Standard alphabet, whitespace- and padding-tolerant.
