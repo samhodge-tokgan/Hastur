@@ -327,15 +327,38 @@ std::unique_ptr<SealedTree> SealedTree::open_from_env(const std::string& dir,
   if (lp && *lp) {
     bool ok = false;
     text = read_file(lp, &ok);
-    if (!ok) text.clear();
+    if (!ok) {
+      // NOT `text.clear()` and carry on. That turned a licence we could not
+      // READ into one that was never CONFIGURED, and open() then told the
+      // operator to set the variable they had already set -- while the real
+      // fault was a root-owned 0400 file and an engine running as them
+      // (rocky8, 2026-09-11). Same defect as the attester's cert, other repo.
+      err = std::string("cannot read the licence at ") + lp +
+            " (set via ROTOBOT_NEXT_LICENSE_PATH).\n"
+            "  The file must be readable by the account running the engine --\n"
+            "  that is you, not a service account. Check with: ls -l " + lp;
+      return nullptr;
+    }
     const char* k = std::getenv("ROTOBOT_NEXT_LICENSE_KEY");
     if (k && *k) {
+      const std::string why = license::diagnose_license_key(k);
+      if (!why.empty()) { err = why; return nullptr; }
       key = k;
     } else {
       // Sibling <path>.key — the same fallback check_license() uses.
       bool kok = false;
-      const std::string raw = read_file(std::string(lp) + ".key", &kok);
-      if (kok) key = license::strip(raw);
+      const std::string sib = std::string(lp) + ".key";
+      const std::string raw = read_file(sib, &kok);
+      if (!kok) {
+        err = "the licence at " + std::string(lp) +
+              " has no key.\n"
+              "  ROTOBOT_NEXT_LICENSE_KEY is unset, so the key is read from a\n"
+              "  SIBLING file named exactly:  " + sib + "\n"
+              "  which does not exist or is not readable. Note the name keeps\n"
+              "  the .lic -- facility.lic pairs with facility.lic.key.";
+        return nullptr;
+      }
+      key = license::strip(raw);
     }
   }
   return open(dir, text, key, err);
