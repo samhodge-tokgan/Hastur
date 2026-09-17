@@ -630,7 +630,22 @@ if(HASTUR_WITH_ONNX)
   if(OpenMP_CXX_FOUND)
     target_link_libraries(hastur_export PRIVATE OpenMP::OpenMP_CXX)
   endif()
-  if(NOT WIN32)
+  # MSVC needs _USE_MATH_DEFINES for M_PI (CameraSolver.cpp) -- the identical
+  # omission that bit pipeline_smoke above, for the identical reason: Windows CI
+  # built neither target, so the tree stayed green while the target would not
+  # compile. Both are now in the Windows CI target list.
+  if(MSVC)
+    target_compile_definitions(hastur_export PRIVATE _USE_MATH_DEFINES NOMINMAX)
+  endif()
+  if(WIN32)
+    # No rpath on Windows: copy the ORT DLLs next to hastur_export.exe so it can run.
+    file(GLOB ORT_ALL_DLLS4 "${ORT_DIR}/lib/*.dll")
+    foreach(dll ${ORT_ALL_DLLS4})
+      add_custom_command(TARGET hastur_export POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${dll}" "$<TARGET_FILE_DIR:hastur_export>"
+        VERBATIM)
+    endforeach()
+  else()
     set_target_properties(hastur_export PROPERTIES
       BUILD_RPATH "${ORT_DIR}/lib" INSTALL_RPATH "${ORT_DIR}/lib")
   endif()
@@ -644,7 +659,20 @@ if(HASTUR_WITH_ONNX)
   )
   target_include_directories(hastur_track PRIVATE src tools vendor)
   target_link_libraries(hastur_track PRIVATE onnxruntime hastur_modelcrypt ${HASTUR_FS_LIB})
-  if(NOT WIN32)
+  # No M_PI here (CameraSolver.cpp is not in this target), but NOMINMAX keeps the
+  # windows.h min/max macros away from std:: in anything vendored transitively.
+  if(MSVC)
+    target_compile_definitions(hastur_track PRIVATE NOMINMAX)
+  endif()
+  if(WIN32)
+    # No rpath on Windows: copy the ORT DLLs next to hastur_track.exe so it can run.
+    file(GLOB ORT_ALL_DLLS5 "${ORT_DIR}/lib/*.dll")
+    foreach(dll ${ORT_ALL_DLLS5})
+      add_custom_command(TARGET hastur_track POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${dll}" "$<TARGET_FILE_DIR:hastur_track>"
+        VERBATIM)
+    endforeach()
+  else()
     set_target_properties(hastur_track PROPERTIES
       BUILD_RPATH "${ORT_DIR}/lib" INSTALL_RPATH "${ORT_DIR}/lib")
   endif()
