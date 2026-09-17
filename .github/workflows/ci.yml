@@ -231,24 +231,34 @@ jobs:
       - name: Verify the CLI tools launch (DLL closure is complete)
         shell: pwsh
         run: |
+          # The tools print usage on stderr and exit 2, which is the success case
+          # here. GitHub runs pwsh steps with $ErrorActionPreference='stop', and
+          # `2>&1` turns native stderr into ErrorRecords -- which would fail the
+          # step even though every assertion below passed. Redirect to a file
+          # instead, and end with an explicit exit 0 so the tools' own rc=2 is
+          # not mistaken for the step's result.
+          $ErrorActionPreference = 'Continue'
           # These are the first Windows exes here that link AND RUN OpenSSL (via
           # hastur_modelcrypt). Sam3dBody links it but is never loaded in CI, so a
           # missing libcrypto would have gone unnoticed.
           $env:PATH = "C:\Program Files\OpenSSL\bin;$env:PATH"
           foreach ($t in @("hastur_track","hastur_export")) {
             $exe = "build/Release/$t.exe"
-            if (!(Test-Path $exe)) { throw "missing $exe" }
+            if (!(Test-Path $exe)) { Write-Error "missing $exe"; exit 1 }
             # No args -> usage + exit 2. This is a real smoke test of the DLL
             # closure: an unresolved onnxruntime.dll or libcrypto exits
             # -1073741515 (0xC0000135 STATUS_DLL_NOT_FOUND) and prints nothing.
-            $out = (& $exe 2>&1 | Out-String)
+            $log = "$env:RUNNER_TEMP\$t.smoke.txt"
+            & $exe *> $log          # *> = all streams to one file, no handle clash
             $rc = $LASTEXITCODE
+            $out = (Get-Content $log -Raw -ErrorAction SilentlyContinue)
             Write-Host "$t -> rc=$rc"
             Write-Host $out
-            if ($rc -ne 2) { throw "$t exited $rc, expected 2 (usage). A DLL almost certainly failed to resolve." }
-            if ($out -notmatch "usage:") { throw "$t did not print usage" }
+            if ($rc -ne 2) { Write-Error "$t exited $rc, expected 2 (usage). A DLL almost certainly failed to resolve."; exit 1 }
+            if ($out -notmatch "usage:") { Write-Error "$t did not print usage"; exit 1 }
           }
           Write-Host "CLI tools launch OK"
+          exit 0
 
       - name: Upload Windows bundle artifact
         uses: actions/upload-artifact@v4
