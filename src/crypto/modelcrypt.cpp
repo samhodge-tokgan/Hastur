@@ -1,15 +1,3 @@
-// ============================================================================
-// VENDORED FROM Rotobot-Next — DO NOT EDIT HERE.
-//
-// Sealing and opening must agree byte for byte. If this copy drifts from
-// Rotobot-Next/src/crypto/modelcrypt.cpp, a sealed model tree written by rotobot_model_seal
-// stops opening in Hastur, and the failure looks like a corrupt artifact
-// rather than a source divergence.
-//
-// Edit the original, then re-copy. dev/sync-modelcrypt.sh checks they match,
-// and the decoy-digest self-test in ModelBytes.cpp fails the build if the key
-// derivation itself has diverged.
-// ============================================================================
 // SPDX-License-Identifier: LicenseRef-Tokgan-Proprietary
 // Copyright (c) Tokgan. Proprietary — licensed under the Tokgan EULA; see NOTICE.
 #include "crypto/modelcrypt.h"
@@ -409,6 +397,13 @@ bool SealedTree::materialise(const std::vector<std::string>& logicals,
   // /dev/shm is also only 64 MB inside a container by default, and the
   // tracker's external data is ~2 GB, so a pod without a memory-backed volume
   // fails below rather than here. That failure is deliberate too.
+  //
+  // NOTE: the premise that forced this whole path -- "ORT cannot resolve an
+  // .onnx.data sidecar from a buffer" -- stopped being true at ORT 1.17, which
+  // added AddExternalInitializersFromFilesInMemory. read() already returns the
+  // sidecar's bytes, so a loader needs nothing new from this class to avoid the
+  // scratch directory entirely. This function is kept for callers that still
+  // want a real path; it is not the recommended route on any platform.
   std::error_code ec;
   std::string base;
   if (fs::exists("/dev/shm", ec)) {
@@ -424,12 +419,15 @@ bool SealedTree::materialise(const std::vector<std::string>& logicals,
   } else {
     err = "this model tree needs a RAM-backed scratch directory and there is no "
           "/dev/shm on this platform.\n"
-          "  Models with external data cannot be loaded from memory (ORT cannot "
-          "resolve an .onnx.data sidecar from a buffer), so they are decrypted "
-          "to tmpfs instead.\n"
-          "  Sealed model trees are a Linux feature today; use an unsealed tree "
-          "here, or set ROTOBOT_MODELS_ALLOW_DISK_SCRATCH=1 to accept plaintext "
-          "weights on disk for the life of the process.";
+          "  materialise() is the FALLBACK path. A loader should instead read() "
+          "the graph and its .onnx.data sidecar into buffers and hand them to "
+          "ORT via CreateSessionFromArray plus "
+          "AddExternalInitializersFromFilesInMemory, which needs no scratch "
+          "directory on any platform and never puts plaintext weights on a "
+          "filesystem at all.\n"
+          "  If this path is genuinely required, it is Linux-only: set "
+          "ROTOBOT_MODELS_ALLOW_DISK_SCRATCH=1 to accept plaintext weights on "
+          "disk for the life of the process, or use an unsealed tree.";
     return false;
   }
   std::random_device rd;

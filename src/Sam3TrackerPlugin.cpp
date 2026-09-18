@@ -206,7 +206,12 @@ hastur::MultiPaths T3BuildPaths(const std::string& dir) {
   // Sealed trees decrypt into a RAM-backed directory first; a plaintext tree
   // comes back unchanged. Every path below is built off the result, so nothing
   // downstream needs to know which it got.
-  const std::string resolved = hastur::MaterialiseModelDir(dir, Sam3TrackerFiles());
+  // No materialise step. The ONNX graphs load from memory with their
+  // .onnx.data sidecars registered via AddExternalInitializersFromFilesInMemory
+  // (#68), and the .npy constants now load from memory too -- so nothing here
+  // needs a file to exist on disk. Paths below are names the SealedTree
+  // resolves, not filesystem locations.
+  const std::string resolved = dir;
   namespace fs = std::filesystem;
   const fs::path d(resolved);
   hastur::MultiPaths p;
