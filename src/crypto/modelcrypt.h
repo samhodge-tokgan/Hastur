@@ -1,15 +1,3 @@
-// ============================================================================
-// VENDORED FROM Rotobot-Next — DO NOT EDIT HERE.
-//
-// Sealing and opening must agree byte for byte. If this copy drifts from
-// Rotobot-Next/src/crypto/modelcrypt.h, a sealed model tree written by rotobot_model_seal
-// stops opening in Hastur, and the failure looks like a corrupt artifact
-// rather than a source divergence.
-//
-// Edit the original, then re-copy. dev/sync-modelcrypt.sh checks they match,
-// and the decoy-digest self-test in ModelBytes.cpp fails the build if the key
-// derivation itself has diverged.
-// ============================================================================
 // SPDX-License-Identifier: LicenseRef-Tokgan-Proprietary
 // Copyright (c) Tokgan. Proprietary — licensed under the Tokgan EULA; see NOTICE.
 //
@@ -137,8 +125,14 @@ class SealedTree {
 
   // Resolve `logical` to a path that ORT can open directly. On a sealed tree
   // this decrypts into a RAM-backed scratch directory owned by this object and
-  // shredded on destruction — needed for models with external data
-  // (`.onnx.data`), which CreateSessionFromArray cannot resolve.
+  // shredded on destruction.
+  //
+  // PREFER read(). This exists because CreateSessionFromArray alone cannot
+  // resolve an `.onnx.data` sidecar — but ORT 1.17's
+  // AddExternalInitializersFromFilesInMemory can, taking the sidecar as a
+  // buffer, and read() already returns exactly that. The in-memory route works
+  // on every platform and never writes plaintext weights to a filesystem;
+  // this one needs tmpfs and so is Linux-only.
   bool materialise(const std::vector<std::string>& logicals, std::string& dir_out,
                    std::string& err);
 
@@ -161,7 +155,7 @@ class SealedTree {
   bool sealed_ = false;
   std::string dir_;
   Key ck_;
-  std::string scratch_;  // /dev/shm/... when materialise() was used
+  std::string scratch_;  // /dev/shm/... when materialise() was used (Linux-only)
 };
 
 // ---- sealing (Tokgan-side) ------------------------------------------------

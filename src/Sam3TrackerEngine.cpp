@@ -1,5 +1,6 @@
 // Copyright the Hastur authors.
 // SPDX-License-Identifier: LicenseRef-SAM-License
+#include "ModelBytes.h"
 #include "Sam3TrackerEngine.h"
 
 #include <algorithm>
@@ -15,20 +16,30 @@ namespace hastur {
 
 // ---------------------------------------------------------------- npy loader
 Sam3TrackerEngine::Tensor Sam3TrackerEngine::LoadNpyFloat(const std::string& path) {
-  std::ifstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("npy: cannot open " + path);
-  char magic[6]; f.read(magic, 6);
-  if (std::memcmp(magic, "\x93NUMPY", 6) != 0) throw std::runtime_error("npy: bad magic " + path);
-  unsigned char ver[2]; f.read(reinterpret_cast<char*>(ver), 2);
+  // Bytes, not a path: LoadModelBytes reads a sealed tree or a plaintext one,
+  // so these constants no longer need a real file to exist. With the ONNX
+  // graphs already loading from memory, this is the last thing that required a
+  // materialised directory.
+  const std::string buf = hastur::LoadModelBytes(path);
+  size_t off = 0;
+  auto need = [&](size_t n) {
+    if (off + n > buf.size()) throw std::runtime_error("npy: short read " + path);
+  };
+  need(6);
+  if (std::memcmp(buf.data(), "\x93NUMPY", 6) != 0)
+    throw std::runtime_error("npy: bad magic " + path);
+  off = 6;
+  need(2);
+  const unsigned char v0 = static_cast<unsigned char>(buf[off]);
+  off += 2;
   uint32_t hlen;
-  if (ver[0] == 1) { uint16_t h; f.read(reinterpret_cast<char*>(&h), 2); hlen = h; }
-  else { f.read(reinterpret_cast<char*>(&hlen), 4); }
-  std::string hdr(hlen, '\0'); f.read(&hdr[0], hlen);
+  if (v0 == 1) { need(2); uint16_t h; std::memcpy(&h, buf.data() + off, 2); hlen = h; off += 2; }
+  else         { need(4); std::memcpy(&hlen, buf.data() + off, 4); off += 4; }
+  need(hlen);
+  const std::string hdr(buf.data() + off, hlen);
+  off += hlen;
   if (hdr.find("<f4") == std::string::npos)
-    throw std::runtime_error("npy: expected <f4 in " + path + " hdr=" + hdr);
-  if (hdr.find("'fortran_order': False") == std::string::npos && hdr.find("False") == std::string::npos)
-    throw std::runtime_error("npy: expected C-order in " + path);
-  // parse shape tuple
+    throw std::runtime_error("npy: expected <f4 in " + path);
   Tensor t;
   auto sp = hdr.find("'shape':");
   auto lp = hdr.find('(', sp), rp = hdr.find(')', sp);
@@ -41,10 +52,9 @@ Sam3TrackerEngine::Tensor Sam3TrackerEngine::LoadNpyFloat(const std::string& pat
     if (e > pos) t.shape.push_back(std::stoll(dims.substr(pos, e - pos)));
     pos = e + 1;
   }
-  size_t n = t.elems();
-  t.data.resize(n);
-  f.read(reinterpret_cast<char*>(t.data.data()), n * sizeof(float));
-  if (!f) throw std::runtime_error("npy: short read " + path);
+  size_t n = t.elems(); t.data.resize(n);
+  need(n * sizeof(float));
+  std::memcpy(t.data.data(), buf.data() + off, n * sizeof(float));
   return t;
 }
 
