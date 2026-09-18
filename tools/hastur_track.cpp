@@ -156,27 +156,6 @@ double IouBinLogit(const std::vector<uint8_t>& det, const std::vector<float>& tr
   return uni ? static_cast<double>(inter) / uni : 0.0;
 }
 
-// Write a valid but EMPTY tracks.txt (header only) — the exact form
-// ExternalTracks already tolerates for a clip with 0 detected persons.
-// Used on the zero-detection / engine-throw path so a person-free clip
-// is a clean success, not a crash. Mirrors the header the normal write
-// path emits (tracks.txt:339-343) with no data rows and no ids.
-void writeEmptyTracks(const fs::path& sdir) {
-  std::error_code ec;
-  fs::create_directories(sdir / "masks", ec);
-  std::ofstream tt(sdir / "tracks.txt", std::ios::binary | std::ios::trunc);
-  if (!tt) {
-    std::fprintf(stderr, "[hastur_track] cannot open %s/tracks.txt for empty write\n",
-                 sdir.string().c_str());
-    return;
-  }
-  tt << "# hastur-tracks v1\n";
-  tt << "# ids\n";
-  tt << "# frame track_id x0 y0 x1 y1 mask_relpath\n";
-  tt.flush();
-  std::fprintf(stderr, "[hastur_track] wrote empty %s/tracks.txt (0 persons)\n",
-               sdir.string().c_str());
-}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -407,19 +386,36 @@ int main(int argc, char** argv) {
   return 0;
 
   }  // try
+  // AN EXCEPTION IS NOT AN EMPTY CLIP.
+  //
+  // These handlers used to write empty tracks and exit 0, which made "I could
+  // not load my weights" indistinguishable from "nobody is in this shot". The
+  // genuinely person-free case is already handled on the success path above --
+  // it writes a header-only tracks.txt and returns 0 -- so nothing legitimate
+  // depends on these returning 0.
+  //
+  // The cost of getting this wrong is not a confusing log line. person_frames=0
+  // reaches the .done sentinel the platform meters, so a failed run bills as an
+  // empty shot; and the usual diagnostic for "0 persons" is --check-models,
+  // which passes here because the models are present and the licence opens
+  // them. The standard reflex points away from the fault.
+  //
+  // Deliberately writing NO tracks.txt here: a readable (even empty) tracks.txt
+  // is precisely what tells the orchestrator this was a real, empty result. The
+  // helper that used to write one from these handlers is gone with them -- it
+  // had no other caller, because the genuine zero-detection case goes through
+  // the normal write path above with no data rows.
   catch (const std::exception& e) {
     std::fprintf(stderr,
-                 "[hastur_track] engine exception (%s) — treating as 0 persons "
-                 "detected; writing empty tracks and exiting 0\n",
+                 "[hastur_track] FAILED: engine exception (%s)\n"
+                 "  This is a FAILURE, not an empty clip: no tracks were written.\n",
                  e.what());
-    writeEmptyTracks(fs::path(out_dir));
-    return 0;
+    return 1;
   }
   catch (...) {
     std::fprintf(stderr,
-                 "[hastur_track] unknown engine exception — treating as 0 persons "
-                 "detected; writing empty tracks and exiting 0\n");
-    writeEmptyTracks(fs::path(out_dir));
-    return 0;
+                 "[hastur_track] FAILED: unknown engine exception\n"
+                 "  This is a FAILURE, not an empty clip: no tracks were written.\n");
+    return 1;
   }
 }
