@@ -216,7 +216,15 @@ int main(int argc, char** argv) {
   };
 
   // ---- build the engine (loads G1..G5 + constants; throws on missing assets) ----
-  Sam3MultiTracker eng(BuildPaths(models), hastur::Ep::Auto, ChoiceToUnits(units));
+  // HASTUR_TRACK_CPU=1 forces a plain CPU session, matching the convention the
+  // other engines already use (HASTUR_DET_CPU, HASTUR_BODY_CPU, HASTUR_HAND_CPU).
+  // Ep::Auto would ALSO land on CPU when no accelerator is present, but only by
+  // falling back after a failed attempt; asking for Cpu outright is how an
+  // explicit --cpu-only request is honoured, and it skips the provider-load
+  // errors that otherwise dominate the log on a machine with no GPU.
+  const bool want_cpu = std::getenv("HASTUR_TRACK_CPU") != nullptr;
+  Sam3MultiTracker eng(BuildPaths(models), want_cpu ? hastur::Ep::Cpu : hastur::Ep::Auto,
+                       ChoiceToUnits(units));
   std::fprintf(stderr,
                "[hastur_track] frames %d..%d (N=%d) accel=%d score=%.3f nms=%.3f "
                "bidir=%d\n",
