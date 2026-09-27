@@ -131,11 +131,32 @@ class Sam3MultiTracker {
     std::vector<std::string> in_names, out_names;
   };
   void InitGraph(OrtGraph& g, std::shared_ptr<OrtSessionManager::Handle> h);
+  // `wants` names the outputs to fetch, IN THE ORDER the caller wants them back,
+  // so callers index the result by their own list rather than by the graph's
+  // declaration order. Empty = fetch every output (the original behaviour).
+  //
+  // Fetching fewer outputs does NOT skip their compute -- ORT builds one execution
+  // plan at session init and runs all of it -- but it does skip the device-to-host
+  // copy and the host allocation, which is where this pays.
   std::vector<Tensor> RunFloat(
-      OrtGraph& g, const std::vector<std::pair<std::string, const Tensor*>>& feeds);
+      OrtGraph& g, const std::vector<std::pair<std::string, const Tensor*>>& feeds,
+      const std::vector<std::string>& wants = {});
 
   void G1(const Tensor& image);  // fills cur_*
   std::vector<Tensor> G2();      // pred_logits, pred_boxes, pred_masks, presence
+
+  // ---- device-resident G1 -> G2 hand-off ----
+  // det_fpn0/1/2 and det_pos72 are produced by G1 and fed to G2 verbatim; the
+  // host never reads a value out of them. Holding them in device memory removes
+  // 116 MB/frame of device-to-host copies and the same again on the way back in.
+  //
+  // Enabled only when a CUDA device allocator can be created AND all four shapes
+  // are static, so CoreML, CPU-only and any future EP keep the original host path
+  // without a platform #ifdef. Set HASTUR_DEV_HANDOFF=off to force the host path.
+  void SetupDeviceHandoff();
+  void G1Bound(const Tensor& image);
+  std::vector<Tensor> G2Bound();
+
   Tensor G3(const Tensor& src, const Tensor& src_pos, const Tensor& prompt,
             const Tensor& prompt_pos, int64_t num_obj_ptr_tokens);
   void G4(const Tensor& bf, const Tensor& hr0, const Tensor& hr1, Tensor& low,
@@ -165,6 +186,17 @@ class Sam3MultiTracker {
   Tensor cur_detf0_, cur_detf1_, cur_detf2_, cur_detpos_;
   int cur_frame_idx_ = 0;
   int total_frames_ = 0;
+
+  // Declared LAST on purpose. Members are destroyed in reverse declaration
+  // order, so these are torn down BEFORE mgr_ and g1_..g5_ above. Getting this
+  // backwards frees ORT bindings, device values and an allocator against an
+  // already-destroyed session and Env: Linux tolerated it silently, Windows
+  // exited 0xC0000005 after writing correct output. Within this group the order
+  // also matters -- bindings, then the values, then the allocator that made them.
+  std::unique_ptr<Ort::Allocator> dev_alloc_;
+  std::vector<Ort::Value> dev_det_;  // the four, pre-allocated once and reused
+  std::unique_ptr<Ort::IoBinding> bind_g1_, bind_g2_;
+  bool dev_handoff_ = false;
 };
 
 }  // namespace hastur
