@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
@@ -66,6 +67,7 @@ Sam3MultiTracker::Sam3MultiTracker(const MultiPaths& p, Ep ep, ComputeUnits unit
   InitGraph(g3_, mgr_.MakeSession(p.g3, units, ep));
   InitGraph(g4_, mgr_.MakeSession(p.g4, units, ep));
   InitGraph(g5_, mgr_.MakeSession(p.g5, units, ep));
+  SetupDeviceHandoff();
   accel_active_ = g1_.h->accelerator_active();
   tpos_ = LoadNpyFloat(p.tpos);
   no_mem_ = LoadNpyFloat(p.no_mem);
@@ -78,7 +80,17 @@ Sam3MultiTracker::Sam3MultiTracker(const MultiPaths& p, Ep ep, ComputeUnits unit
   for (size_t i = 0; i < lm.data.size(); ++i) lang_mask_bool_[i] = lm.data[i] > 0.5f ? 1 : 0;
 }
 
-Sam3MultiTracker::~Sam3MultiTracker() = default;
+Sam3MultiTracker::~Sam3MultiTracker() {
+  // Tear the device hand-off down explicitly and in order, rather than relying
+  // on member order alone. The bindings reference the sessions, the values were
+  // allocated by dev_alloc_, and dev_alloc_ references g1_'s session -- so all
+  // three must go before the OrtSessionManager does.
+  bind_g1_.reset();
+  bind_g2_.reset();
+  dev_det_.clear();
+  dev_alloc_.reset();
+  dev_handoff_ = false;
+}
 
 void Sam3MultiTracker::InitGraph(OrtGraph& g, std::shared_ptr<OrtSessionManager::Handle> h) {
   g.h = std::move(h);
@@ -91,7 +103,8 @@ void Sam3MultiTracker::InitGraph(OrtGraph& g, std::shared_ptr<OrtSessionManager:
 }
 
 std::vector<Sam3MultiTracker::Tensor> Sam3MultiTracker::RunFloat(
-    OrtGraph& g, const std::vector<std::pair<std::string, const Tensor*>>& feeds) {
+    OrtGraph& g, const std::vector<std::pair<std::string, const Tensor*>>& feeds,
+    const std::vector<std::string>& wants) {
   Ort::Session& s = g.h->Get();
   std::vector<Ort::Value> ins;
   std::vector<const char*> in_names;
@@ -104,8 +117,20 @@ std::vector<Sam3MultiTracker::Tensor> Sam3MultiTracker::RunFloat(
         mem_info_, const_cast<float*>(t->data.data()), t->data.size(),
         t->shape.data(), t->shape.size()));
   }
+  // Fetch `wants` in the caller's order, or every output when it is empty. A name
+  // that is not on the graph fails here rather than surfacing later as an ORT error
+  // far from its cause, or as a silently short result the caller indexes past.
   std::vector<const char*> out_names;
-  for (const auto& n : g.out_names) out_names.push_back(n.c_str());
+  if (wants.empty()) {
+    for (const auto& n : g.out_names) out_names.push_back(n.c_str());
+  } else {
+    for (const auto& w : wants) {
+      const std::string* found = nullptr;
+      for (const auto& n : g.out_names) if (n == w) { found = &n; break; }
+      if (!found) throw std::runtime_error("Sam3Multi: graph has no output '" + w + "'");
+      out_names.push_back(found->c_str());
+    }
+  }
   auto res = s.Run(Ort::RunOptions{nullptr}, in_names.data(), ins.data(), ins.size(),
                    out_names.data(), out_names.size());
   std::vector<Tensor> out;
@@ -119,17 +144,142 @@ std::vector<Sam3MultiTracker::Tensor> Sam3MultiTracker::RunFloat(
   return out;
 }
 
+
+// ------------------------------------------------- device-resident hand-off
+namespace {
+// G1's output names, and the G2 input names they feed, in matching order.
+const char* const kDetOut[4] = {"det_fpn0", "det_fpn1", "det_fpn2", "det_pos72"};
+const char* const kDetIn[4]  = {"fpn0", "fpn1", "fpn2", "pos72"};
+// The G1 outputs the host genuinely consumes: fpn0/fpn1 go to G4 but fpn2 and
+// pos2 are transposed on the host by FlattenHWBC, so all four come back.
+const char* const kHostOut[4] = {"fpn0", "fpn1", "fpn2", "pos2"};
+}  // namespace
+
+void Sam3MultiTracker::SetupDeviceHandoff() {
+  const char* off = std::getenv("HASTUR_DEV_HANDOFF");
+  if (off && std::string(off) == "off") return;
+  try {
+    Ort::Session& s1 = g1_.h->Get();
+    Ort::MemoryInfo cuda("Cuda", OrtDeviceAllocator, 0, OrtMemTypeDefault);
+    dev_alloc_ = std::make_unique<Ort::Allocator>(s1, cuda);
+    for (int i = 0; i < 4; ++i) {
+      size_t idx = g1_.out_names.size();
+      for (size_t k = 0; k < g1_.out_names.size(); ++k)
+        if (g1_.out_names[k] == kDetOut[i]) { idx = k; break; }
+      if (idx == g1_.out_names.size()) throw std::runtime_error("no such G1 output");
+      auto shp = s1.GetOutputTypeInfo(idx).GetTensorTypeAndShapeInfo().GetShape();
+      // A dynamic dim cannot be pre-allocated; fall back rather than guess.
+      for (auto d : shp) if (d < 0) throw std::runtime_error("dynamic G1 output");
+      dev_det_.push_back(Ort::Value::CreateTensor<float>(
+          static_cast<OrtAllocator*>(*dev_alloc_), shp.data(), shp.size()));
+    }
+    bind_g1_ = std::make_unique<Ort::IoBinding>(s1);
+    bind_g2_ = std::make_unique<Ort::IoBinding>(g2_.h->Get());
+    dev_handoff_ = true;
+  } catch (const std::exception&) {
+    // No CUDA allocator (CoreML/CPU), or the graph changed shape. Either way the
+    // host path below is correct, just slower -- so this is a silent downgrade by
+    // design, and staging_mode()-style reporting is left to the caller's log.
+    bind_g1_.reset(); bind_g2_.reset();
+    dev_det_.clear(); dev_alloc_.reset();
+    dev_handoff_ = false;
+  }
+}
+
+void Sam3MultiTracker::G1Bound(const Tensor& image) {
+  Ort::Session& s = g1_.h->Get();
+  bind_g1_->ClearBoundInputs();
+  bind_g1_->ClearBoundOutputs();
+  Ort::Value img = Ort::Value::CreateTensor<float>(
+      mem_info_, const_cast<float*>(image.data.data()), image.data.size(),
+      image.shape.data(), image.shape.size());
+  bind_g1_->BindInput("image", img);
+  for (const char* n : kHostOut) bind_g1_->BindOutput(n, mem_info_);
+  for (int i = 0; i < 4; ++i) bind_g1_->BindOutput(kDetOut[i], dev_det_[i]);
+  s.Run(Ort::RunOptions{nullptr}, *bind_g1_);
+
+  // Pull the host-bound four back by NAME -- binding order is not a contract.
+  auto names = bind_g1_->GetOutputNames();
+  auto vals = bind_g1_->GetOutputValues();
+  auto take = [&](const char* nm, Tensor& dst) {
+    for (size_t i = 0; i < names.size(); ++i) {
+      if (names[i] != nm) continue;
+      dst.shape = vals[i].GetTensorTypeAndShapeInfo().GetShape();
+      const float* pd = vals[i].GetTensorData<float>();
+      dst.data.assign(pd, pd + dst.elems());
+      return;
+    }
+    throw std::runtime_error(std::string("G1 binding lost output ") + nm);
+  };
+  take("fpn0", cur_f0_);
+  take("fpn1", cur_f1_);
+  take("fpn2", cur_f2_);
+  take("pos2", cur_pos2_);
+  // cur_detf0_/1_/2_/detpos_ stay empty on this path -- G2Bound reads dev_det_.
+}
+
+std::vector<Sam3MultiTracker::Tensor> Sam3MultiTracker::G2Bound() {
+  Ort::Session& s = g2_.h->Get();
+  bind_g2_->ClearBoundInputs();
+  bind_g2_->ClearBoundOutputs();
+  for (int i = 0; i < 4; ++i) bind_g2_->BindInput(kDetIn[i], dev_det_[i]);
+  Ort::Value lf = Ort::Value::CreateTensor<float>(
+      mem_info_, const_cast<float*>(lang_feats_.data.data()), lang_feats_.data.size(),
+      lang_feats_.shape.data(), lang_feats_.shape.size());
+  bind_g2_->BindInput("lang_feats", lf);
+  Ort::Value lm = Ort::Value::CreateTensor<bool>(
+      mem_info_, reinterpret_cast<bool*>(lang_mask_bool_.data()), lang_mask_bool_.size(),
+      lang_mask_shape_.data(), lang_mask_shape_.size());
+  bind_g2_->BindInput("lang_mask", lm);
+  for (const auto& n : g2_.out_names) bind_g2_->BindOutput(n.c_str(), mem_info_);
+  s.Run(Ort::RunOptions{nullptr}, *bind_g2_);
+
+  auto names = bind_g2_->GetOutputNames();
+  auto vals = bind_g2_->GetOutputValues();
+  std::vector<Tensor> out;
+  out.reserve(g2_.out_names.size());
+  for (const auto& want : g2_.out_names) {
+    bool got = false;
+    for (size_t i = 0; i < names.size(); ++i) {
+      if (names[i] != want) continue;
+      Tensor t;
+      t.shape = vals[i].GetTensorTypeAndShapeInfo().GetShape();
+      const float* pd = vals[i].GetTensorData<float>();
+      t.data.assign(pd, pd + t.elems());
+      out.push_back(std::move(t));
+      got = true;
+      break;
+    }
+    if (!got) throw std::runtime_error("G2 binding lost output " + want);
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- graphs
 void Sam3MultiTracker::G1(const Tensor& image) {
-  auto o = RunFloat(g1_, {{"image", &image}});
-  // fpn0,fpn1,fpn2,pos0,pos1,pos2,det_fpn0,det_fpn1,det_fpn2,det_pos72
+  // G1 declares ten outputs but only eight are ever used. pos0 [1,256,288,288] and
+  // pos1 [1,256,144,144] are 84.9 MB + 21.2 MB that were copied to the host once a
+  // frame and then dropped -- 26% of all device-to-host traffic, for nothing. ORT
+  // still computes them (one execution plan, built at session init), but not
+  // fetching them skips the copy and the host allocation.
+  //
+  // Measured on an A6000 over the 48-frame 4K wakesurfer clip, interleaved against
+  // the fetch-all path in one binary: 54.28s -> 48.11s, -11.4%, masks byte-identical.
+  //
+  // Naming the wanted outputs also keeps the indices below from drifting out of
+  // step with the graph's declaration order.
+  if (dev_handoff_) { G1Bound(image); return; }
+  static const std::vector<std::string> kWant = {
+      "fpn0", "fpn1", "fpn2", "pos2", "det_fpn0", "det_fpn1", "det_fpn2", "det_pos72"};
+  auto o = RunFloat(g1_, {{"image", &image}}, kWant);
   cur_f0_ = std::move(o[0]); cur_f1_ = std::move(o[1]); cur_f2_ = std::move(o[2]);
-  cur_pos2_ = std::move(o[5]);
-  cur_detf0_ = std::move(o[6]); cur_detf1_ = std::move(o[7]);
-  cur_detf2_ = std::move(o[8]); cur_detpos_ = std::move(o[9]);
+  cur_pos2_ = std::move(o[3]);
+  cur_detf0_ = std::move(o[4]); cur_detf1_ = std::move(o[5]);
+  cur_detf2_ = std::move(o[6]); cur_detpos_ = std::move(o[7]);
 }
 
 std::vector<Sam3MultiTracker::Tensor> Sam3MultiTracker::G2() {
+  if (dev_handoff_) return G2Bound();
   Ort::Session& s = g2_.h->Get();
   std::vector<Ort::Value> ins;
   std::vector<const char*> names;
