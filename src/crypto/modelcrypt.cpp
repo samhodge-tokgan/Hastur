@@ -1,3 +1,13 @@
+// ============================================================================
+// VENDORED FROM Rotobot-Next — DO NOT EDIT HERE.
+//
+// Sealing and opening must agree byte for byte. If this copy drifts from
+// Rotobot-Next/src/crypto/modelcrypt.{h,cpp}, a sealed model tree written by
+// rotobot_model_seal stops opening in Hastur, and the failure looks like a
+// corrupt artifact rather than a source divergence.
+//
+// Edit the original, then re-copy: dev/sync-modelcrypt.sh --fix.
+// ============================================================================
 // SPDX-License-Identifier: LicenseRef-Tokgan-Proprietary
 // Copyright (c) Tokgan. Proprietary — licensed under the Tokgan EULA; see NOTICE.
 #include "crypto/modelcrypt.h"
@@ -99,15 +109,21 @@ bool Sealed::from_json(const std::string& json, Sealed& out) {
 
 // --------------------------------------------------------------------------
 
-Key unwrap_pms(const std::string& licence_text, const std::string& licence_key,
-               const std::string& generation, std::string* why) {
-  // Say WHY on every failure path. These all return the same empty Key, and the
-  // caller cannot tell them apart — so it used to assert the last one, which is
-  // how "the vendored copy is looking for a metadata key Keygen renamed" got
-  // reported to a customer as "ask Tokgan to re-issue the licence".
-  const auto fail = [&](const char* reason) -> Key {
+namespace {
+
+// Decrypt a .lic and hand back its `metadata` object. Factored out because two
+// callers need it -- unwrap_pms() for the model key, and licence_host_binding()
+// to report whether the licence is node-locked. Duplicating the crypto would be
+// two places encoding one format, which is how these drift apart unnoticed.
+//
+// Returns false and sets *why on any failure; the wording is the caller-visible
+// diagnostic, so keep it specific.
+bool decrypt_licence_metadata(const std::string& licence_text,
+                              const std::string& licence_key,
+                              nlohmann::json& meta, std::string* why) {
+  const auto fail = [&](const char* reason) {
     if (why) *why = reason;
-    return Key();
+    return false;
   };
   // The licence payload: strip the envelope, base64, then the AES-GCM segment
   // keyed by SHA256(licence_key) — the same shape verify_offline() reads.
@@ -129,10 +145,41 @@ Key unwrap_pms(const std::string& licence_text, const std::string& licence_key,
   }
   try { doc = nlohmann::json::parse(plain); }
   catch (...) { return fail("the decrypted licence payload is not JSON"); }
+  meta = doc.value("data", nlohmann::json::object())
+             .value("attributes", nlohmann::json::object())
+             .value("metadata", nlohmann::json::object());
+  return true;
+}
 
-  const auto meta = doc.value("data", nlohmann::json::object())
-                        .value("attributes", nlohmann::json::object())
-                        .value("metadata", nlohmann::json::object());
+}  // namespace
+
+bool licence_host_binding(const std::string& licence_text,
+                          const std::string& licence_key,
+                          bool* node_locked, std::string* why) {
+  nlohmann::json meta;
+  if (!decrypt_licence_metadata(licence_text, licence_key, meta, why)) return false;
+  // The client gates the whole node-lock comparison on metadata.tgfp1 being
+  // present (src/license/Keygen.cpp). Absent means bearer: the licence runs on
+  // any host until it expires. Keygen camelCases metadata KEY NAMES, so accept
+  // the shapes that survives that -- "tgfp1" has no separator to mangle, but a
+  // future rename should fail loudly here rather than silently report "bearer".
+  if (node_locked) *node_locked = meta.contains("tgfp1") || meta.contains("hostFp") ||
+                                  meta.contains("host_fp");
+  return true;
+}
+
+Key unwrap_pms(const std::string& licence_text, const std::string& licence_key,
+               const std::string& generation, std::string* why) {
+  // Say WHY on every failure path. These all return the same empty Key, and the
+  // caller cannot tell them apart — so it used to assert the last one, which is
+  // how "the vendored copy is looking for a metadata key Keygen renamed" got
+  // reported to a customer as "ask Tokgan to re-issue the licence".
+  const auto fail = [&](const char* reason) -> Key {
+    if (why) *why = reason;
+    return Key();
+  };
+  nlohmann::json meta;
+  if (!decrypt_licence_metadata(licence_text, licence_key, meta, why)) return Key();
   // Keygen REWRITES METADATA KEY NAMES. Verified against a real minted licence:
   // "model_pms" came back as "modelPms", and the nested "gen-2026" came back as
   // "gen2026" — it camelCases the whole key tree, separators and all.

@@ -1,3 +1,13 @@
+// ============================================================================
+// VENDORED FROM Rotobot-Next — DO NOT EDIT HERE.
+//
+// Sealing and opening must agree byte for byte. If this copy drifts from
+// Rotobot-Next/src/crypto/modelcrypt.{h,cpp}, a sealed model tree written by
+// rotobot_model_seal stops opening in Hastur, and the failure looks like a
+// corrupt artifact rather than a source divergence.
+//
+// Edit the original, then re-copy: dev/sync-modelcrypt.sh --fix.
+// ============================================================================
 // SPDX-License-Identifier: LicenseRef-Tokgan-Proprietary
 // Copyright (c) Tokgan. Proprietary — licensed under the Tokgan EULA; see NOTICE.
 //
@@ -74,6 +84,19 @@ std::string decoy_digest_hex();
 // investigation a long way in the wrong direction (2026-09-08).
 Key unwrap_pms(const std::string& licence_text, const std::string& licence_key,
                const std::string& generation, std::string* why = nullptr);
+
+// Report whether a licence is node-locked (carries a metadata.tgfp1 host
+// binding) or is a bearer credential that runs on any host until it expires.
+//
+// Exists so packaging can DERIVE what it tells the customer instead of asserting
+// it: make_handover.sh used to state "the licence is node-locked" unconditionally,
+// which is wrong for the bearer licences that are the default, and sent people
+// chasing a hardware-change procedure for a failure that cannot happen.
+//
+// Returns false with *why set only when the licence cannot be decrypted at all.
+bool licence_host_binding(const std::string& licence_text,
+                          const std::string& licence_key,
+                          bool* node_locked, std::string* why = nullptr);
 
 // CK out of a sealed.hdr. `artifact` binds the wrap to one artifact version, so
 // a header lifted between releases does not open.
