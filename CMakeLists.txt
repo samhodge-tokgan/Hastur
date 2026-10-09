@@ -168,6 +168,11 @@ target_include_directories(hastur_modelcrypt PUBLIC src)
 target_link_libraries(hastur_modelcrypt PUBLIC OpenSSL::Crypto nlohmann_json::nlohmann_json)
 set_target_properties(hastur_modelcrypt PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# RegisterModelTree (an embedding app hands Hastur a tree it opened itself).
+#   model_tree_register_validate <scratch dir>
+add_executable(model_tree_register_validate tests/model_tree_register_validate.cpp)
+target_link_libraries(model_tree_register_validate PRIVATE hastur_modelcrypt)
+
 # MHR parametric body model: mhr_assets.bin loader + Eigen LBS. Dependency-light
 # (no OFX / ORT), so it builds and unit-tests standalone.
 add_library(hastur_mhr STATIC src/MeshAssets.cpp src/MhrModel.cpp)
