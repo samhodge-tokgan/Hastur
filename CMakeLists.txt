@@ -660,6 +660,7 @@ if(HASTUR_WITH_ONNX)
   # temporally-stable person_NN ids. See tools/hastur_track.cpp.
   add_executable(hastur_track
     tools/hastur_track.cpp
+    src/Sam3VideoTrack.cpp
     src/Sam3TrackerEngine.cpp src/Sam3MultiTracker.cpp src/OrtSessionManager.cpp
   )
   target_include_directories(hastur_track PRIVATE src tools vendor)
