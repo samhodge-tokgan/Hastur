@@ -12,10 +12,26 @@
 // what lets the sealed rollout land one loader at a time.
 #pragma once
 
+#include <memory>
 #include <string>
 #include <vector>
 
+namespace rotobot {
+namespace modelcrypt {
+class SealedTree;
+}  // namespace modelcrypt
+}  // namespace rotobot
+
 namespace hastur {
+
+// Hand Hastur a model tree that is already open, e.g. one an embedding application
+// (alphagen) opened with its own licence rather than from the ROTOBOT_NEXT_*
+// environment. Every later LoadModelBytes / ModelExists / MaterialiseModelDir for a
+// model in `dir` reads from it. Registering the same dir again replaces the tree.
+// Thread-safe; the tree is kept alive for the life of the process.
+void RegisterModelTree(const std::string& dir,
+                       std::shared_ptr<rotobot::modelcrypt::SealedTree> tree);
+
 
 // The bytes of `model_path`. Throws std::runtime_error with an operator-facing
 // message on a missing file, a missing licence, or a failed decrypt.

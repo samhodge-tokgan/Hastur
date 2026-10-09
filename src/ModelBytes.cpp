@@ -53,8 +53,16 @@ TreeCache& cache() {
   return c;
 }
 
-std::shared_ptr<rotobot::modelcrypt::SealedTree> tree_for(const std::string& dir) {
+// "models/tracker", "models/tracker/" and "models//tracker" are one tree.
+std::string key(const std::string& dir) {
+  std::string k = fs::path(dir).lexically_normal().string();
+  while (k.size() > 1 && (k.back() == '/' || k.back() == '\\')) k.pop_back();
+  return k.empty() ? "." : k;
+}
+
+std::shared_ptr<rotobot::modelcrypt::SealedTree> tree_for(const std::string& dir_in) {
   assert_no_drift();
+  const std::string dir = key(dir_in);
   TreeCache& c = cache();
   std::lock_guard<std::mutex> lk(c.m);
   auto it = c.by_dir.find(dir);
@@ -76,6 +84,15 @@ void split(const std::string& model_path, std::string& dir, std::string& name) {
 }
 
 }  // namespace
+
+void RegisterModelTree(const std::string& dir,
+                       std::shared_ptr<rotobot::modelcrypt::SealedTree> tree) {
+  if (!tree) throw std::invalid_argument("hastur: RegisterModelTree: null tree for " + dir);
+  assert_no_drift();
+  TreeCache& c = cache();
+  std::lock_guard<std::mutex> lk(c.m);
+  c.by_dir[key(dir)] = std::move(tree);
+}
 
 std::string LoadModelBytes(const std::string& model_path) {
   std::string dir, name;
