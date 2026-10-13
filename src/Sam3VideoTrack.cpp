@@ -138,7 +138,7 @@ Sam3VideoTrackResult RunSam3VideoTrack(const MultiPaths& models, const Sam3Frame
   };
 
   // ---- build the engine (loads G1..G5 + constants; throws on missing assets) ----
-  Sam3MultiTracker eng(models, opt.ep, opt.units);
+  Sam3MultiTracker eng(models, opt.ep, opt.units, opt.device);
   std::fprintf(stderr,
                "[%s] frames %ld..%ld (N=%d) accel=%d score=%.3f nms=%.3f "
                "bidir=%d\n",

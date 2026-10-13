@@ -46,6 +46,7 @@ struct Sam3VideoTrackOptions {
   bool bidir = true;         // backward pass from the seed frame
   Ep ep = Ep::Auto;
   ComputeUnits units = ComputeUnits::All;
+  int device = 0;            // CUDA device ordinal (ignored by CoreML/CPU)
   const char* log_tag = "hastur_track";  // stderr prefix
   Sam3Progress progress;     // optional
 };

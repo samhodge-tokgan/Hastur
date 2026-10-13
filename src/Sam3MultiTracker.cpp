@@ -59,14 +59,15 @@ Sam3MultiTracker::Tensor Sam3MultiTracker::LoadNpyFloat(const std::string& path)
 }
 
 // ---------------------------------------------------------------- lifecycle
-Sam3MultiTracker::Sam3MultiTracker(const MultiPaths& p, Ep ep, ComputeUnits units)
+Sam3MultiTracker::Sam3MultiTracker(const MultiPaths& p, Ep ep, ComputeUnits units, int device)
     : mgr_("Sam3Multi"),
-      mem_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)) {
-  InitGraph(g1_, mgr_.MakeSession(p.g1, units, ep));
-  InitGraph(g2_, mgr_.MakeSession(p.g2, units, ep));
-  InitGraph(g3_, mgr_.MakeSession(p.g3, units, ep));
-  InitGraph(g4_, mgr_.MakeSession(p.g4, units, ep));
-  InitGraph(g5_, mgr_.MakeSession(p.g5, units, ep));
+      mem_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)),
+      device_(device) {
+  InitGraph(g1_, mgr_.MakeSession(p.g1, units, ep, 0, false, device));
+  InitGraph(g2_, mgr_.MakeSession(p.g2, units, ep, 0, false, device));
+  InitGraph(g3_, mgr_.MakeSession(p.g3, units, ep, 0, false, device));
+  InitGraph(g4_, mgr_.MakeSession(p.g4, units, ep, 0, false, device));
+  InitGraph(g5_, mgr_.MakeSession(p.g5, units, ep, 0, false, device));
   SetupDeviceHandoff();
   accel_active_ = g1_.h->accelerator_active();
   tpos_ = LoadNpyFloat(p.tpos);
@@ -160,7 +161,7 @@ void Sam3MultiTracker::SetupDeviceHandoff() {
   if (off && std::string(off) == "off") return;
   try {
     Ort::Session& s1 = g1_.h->Get();
-    Ort::MemoryInfo cuda("Cuda", OrtDeviceAllocator, 0, OrtMemTypeDefault);
+    Ort::MemoryInfo cuda("Cuda", OrtDeviceAllocator, device_, OrtMemTypeDefault);
     dev_alloc_ = std::make_unique<Ort::Allocator>(s1, cuda);
     for (int i = 0; i < 4; ++i) {
       size_t idx = g1_.out_names.size();

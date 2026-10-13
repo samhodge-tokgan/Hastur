@@ -66,7 +66,7 @@ void OrtSessionManager::Handle::Build() {
                                 /*coreml_mlprogram=*/true);
 #else
       OrtCUDAProviderOptions cuda{};
-      cuda.device_id = 0;
+      cuda.device_id = cfg_.device;
       cuda.do_copy_in_default_stream = 1;
       if (cfg_.gpu_mem_limit > 0) {
         cuda.gpu_mem_limit = cfg_.gpu_mem_limit;
@@ -81,7 +81,7 @@ void OrtSessionManager::Handle::Build() {
               &arena_cfg));
           OrtMemoryInfo* mem = nullptr;
           Ort::ThrowOnError(Ort::GetApi().CreateMemoryInfo(
-              "Cuda", OrtArenaAllocator, 0, OrtMemTypeDefault, &mem));
+              "Cuda", OrtArenaAllocator, cfg_.device, OrtMemTypeDefault, &mem));
           Ort::ThrowOnError(Ort::GetApi().CreateAndRegisterAllocatorV2(
               static_cast<OrtEnv*>(impl.env), "CUDAExecutionProvider", mem,
               arena_cfg, /*keys=*/nullptr, /*values=*/nullptr, /*num_keys=*/0));
@@ -150,13 +150,14 @@ std::shared_ptr<OrtSessionManager::Handle> OrtSessionManager::MakeSession(
 
 std::shared_ptr<OrtSessionManager::Handle> OrtSessionManager::MakeSession(
     const std::string& path, ComputeUnits units, Ep ep, size_t gpu_mem_limit,
-    bool lazy) {
+    bool lazy, int device) {
   SessionConfig cfg;
   cfg.model_path = path;
   cfg.units = units;
   cfg.ep = ep;
   cfg.gpu_mem_limit = gpu_mem_limit;
   cfg.lazy = lazy;
+  cfg.device = device;
   return MakeSession(cfg);
 }
 
