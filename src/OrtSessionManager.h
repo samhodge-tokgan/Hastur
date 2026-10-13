@@ -32,6 +32,7 @@ struct SessionConfig {
   ComputeUnits units = ComputeUnits::All;  // CoreML MLComputeUnits
   Ep ep = Ep::Auto;
   size_t gpu_mem_limit = 0;  // CUDA per-session arena budget in bytes (0=default)
+  int device = 0;            // CUDA device ordinal (ignored by CoreML/CPU)
   int intra_threads = 0;     // 0 = ORT default
   bool coreml_static = true;
   bool lazy = false;         // defer creation until first Get()
@@ -80,7 +81,7 @@ class OrtSessionManager {
   // Convenience overload matching the pipeline call sites.
   std::shared_ptr<Handle> MakeSession(const std::string& path, ComputeUnits units,
                                       Ep ep = Ep::Auto, size_t gpu_mem_limit = 0,
-                                      bool lazy = false);
+                                      bool lazy = false, int device = 0);
 
  private:
   struct Impl;
