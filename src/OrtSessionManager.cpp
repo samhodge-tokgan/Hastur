@@ -1,5 +1,7 @@
 // Copyright the Hastur authors.
 // SPDX-License-Identifier: LicenseRef-SAM-License
+#include <cstdlib>
+#include <cstdio>
 #include "OrtSessionManager.h"
 #include "OrtModelLoad.h"
 
@@ -10,6 +12,26 @@
 namespace hastur {
 
 namespace {
+
+// MEASUREMENT HOOKS for the CoreML knobs, which are otherwise compile-time
+// constants. A 48-frame burn-in showed the tracker's biggest graph split into
+// EIGHTY-NINE CoreML partitions (2364 nodes, 2068 of them supported). Each
+// partition is a CoreML<->CPU boundary: a copy and a sync. Tuning that blind
+// costs a full rebuild per experiment, so make the two candidates settable.
+//
+//   HASTUR_COREML_UNITS  = ALL | CPUAndGPU | CPUAndNeuralEngine | CPUOnly
+//   HASTUR_COREML_STATIC = 0 | 1   (RequireStaticInputShapes)
+//
+// Defaults unchanged: an unset environment behaves exactly as before.
+const char* ComputeUnitsOverride(const char* fallback) {
+  const char* e = std::getenv("HASTUR_COREML_UNITS");
+  return (e && *e) ? e : fallback;
+}
+
+bool ComputeStaticOverride(bool fallback) {
+  const char* e = std::getenv("HASTUR_COREML_STATIC");
+  return (e && *e) ? (e[0] != '0') : fallback;
+}
 
 const char* ComputeUnitsString(ComputeUnits u) {
   switch (u) {
@@ -61,8 +83,12 @@ void OrtSessionManager::Handle::Build() {
   if (want_accel) {
     try {
 #ifdef __APPLE__
-      hastur::AppendAccelerator(so, ComputeUnitsString(cfg_.units),
-                                /*coreml_static=*/cfg_.coreml_static,
+      const char* units = ComputeUnitsOverride(ComputeUnitsString(cfg_.units));
+      const bool statics = ComputeStaticOverride(cfg_.coreml_static);
+      if (std::getenv("HASTUR_COREML_UNITS") || std::getenv("HASTUR_COREML_STATIC"))
+        std::fprintf(stderr, "[hastur] CoreML units=%s static=%d\n", units, (int)statics);
+      hastur::AppendAccelerator(so, units,
+                                /*coreml_static=*/statics,
                                 /*coreml_mlprogram=*/true);
 #else
       OrtCUDAProviderOptions cuda{};
