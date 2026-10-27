@@ -1,5 +1,12 @@
 # Self-hosted GPU CI runners
 
+> **Status: not in use.** The `gpu-smoke` job was removed from `.github/workflows/ci.yml`. It
+> was manual-only, no runner was ever registered to this repo, and it only built and ran
+> `ort_check --help`. This repo is public, and self-hosted runners on a public repo can run
+> code from fork pull requests, so none are attached. Real GPU inference is not exercised by
+> this repo's CI; use the standalone smoke tests in `docs/LINUX.md` / `docs/WINDOWS.md` on a
+> GPU host. The notes below are kept for reference only.
+
 GitHub-hosted runners have **no GPU**, so the `gpu-smoke` job in `.github/workflows/ci.yml`
 (the only job that exercises real CUDA) runs on a **self-hosted** runner labelled `cuda`. The
 job branches on `runner.os`, so the `cuda` label may be served by either a Windows or a Linux
