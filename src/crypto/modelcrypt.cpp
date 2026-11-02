@@ -141,7 +141,7 @@ bool decrypt_licence_metadata(const std::string& licence_text,
       !license::b64_decode(enc.substr(d1 + 1, d2 - d1 - 1), iv) ||
       !license::b64_decode(enc.substr(d2 + 1), tag) ||
       !aes256gcm_decrypt(sha256(licence_key), iv, ct, tag, plain)) {
-    return fail("the licence did not decrypt — the .key file does not match the .lic");
+    return fail("the licence did not decrypt — the key does not match the .lic");
   }
   try { doc = nlohmann::json::parse(plain); }
   catch (...) { return fail("the decrypted licence payload is not JSON"); }
@@ -374,27 +374,57 @@ std::unique_ptr<SealedTree> SealedTree::open_from_env(const std::string& dir,
             "  that is you, not a service account. Check with: ls -l " + lp;
       return nullptr;
     }
+    // The same candidates, in the same order, as check_license(): the
+    // variable, then the sibling <path>.key. See license::licence_keys.
     const char* k = std::getenv("ROTOBOT_NEXT_LICENSE_KEY");
-    if (k && *k) {
-      const std::string why = license::diagnose_license_key(k);
-      if (!why.empty()) { err = why; return nullptr; }
-      key = k;
-    } else {
-      // Sibling <path>.key — the same fallback check_license() uses.
-      bool kok = false;
+    std::string note;
+    const std::vector<license::LicenceKey> keys =
+        license::licence_keys(lp, k ? k : "", &note);
+    if (keys.empty()) {
       const std::string sib = std::string(lp) + ".key";
-      const std::string raw = read_file(sib, &kok);
-      if (!kok) {
-        err = "the licence at " + std::string(lp) +
-              " has no key.\n"
-              "  ROTOBOT_NEXT_LICENSE_KEY is unset, so the key is read from a\n"
-              "  SIBLING file named exactly:  " + sib + "\n"
-              "  which does not exist or is not readable. Note the name keeps\n"
-              "  the .lic -- facility.lic pairs with facility.lic.key.";
-        return nullptr;
-      }
-      key = license::strip(raw);
+      err = !note.empty() ? note
+          : "the licence at " + std::string(lp) +
+            " has no key.\n"
+            "  ROTOBOT_NEXT_LICENSE_KEY is unset, so the key is read from a\n"
+            "  SIBLING file named exactly:  " + sib + "\n"
+            "  which does not exist or is not readable. Note the name keeps\n"
+            "  the .lic -- facility.lic pairs with facility.lic.key.";
+      return nullptr;
     }
+    // Every candidate gets its turn, and the FIRST failure is the one
+    // reported if none opens: that is the key the operator chose to set.
+    std::string first_err;
+    for (size_t i = 0; i < keys.size(); ++i) {
+      std::string e;
+      std::unique_ptr<SealedTree> t = open(dir, text, keys[i].key, e);
+      if (t) {
+        t->key_source_ = keys[i].source;
+        if (i > 0 && keys[0].from_env()) {
+          // Said once per process, not once per tree: a stage opens several.
+          static bool said = false;
+          if (!said) {
+            said = true;
+            std::fprintf(stderr,
+                "[license] ROTOBOT_NEXT_LICENSE_KEY (key %s) does not open the "
+                "licence at %s;\n"
+                "  used the key file beside it (key %s) instead. Remove the "
+                "variable\n"
+                "  (unset it, and delete it from your shell profile or "
+                "licence.env). [RBN:licence_env_key_mismatch]\n",
+                license::key_fingerprint(keys[0].key).c_str(), lp,
+                license::key_fingerprint(keys[i].key).c_str());
+          }
+        }
+        return t;
+      }
+      if (first_err.empty()) first_err = e;
+    }
+    err = first_err + "\n  The key came from " + keys[0].source + " (key " +
+          license::key_fingerprint(keys[0].key) + ").";
+    if (keys.size() > 1)
+      err += "\n  (Also tried the key in " + keys[1].source + ", which did not "
+             "open it either.)";
+    return nullptr;
   }
   return open(dir, text, key, err);
 }

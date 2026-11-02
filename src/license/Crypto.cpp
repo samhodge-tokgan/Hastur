@@ -104,6 +104,36 @@ std::string diagnose_license_key(const std::string& key) {
   return why;
 }
 
+std::vector<LicenceKey> licence_keys(const std::string& licence_path,
+                                     const std::string& env_key,
+                                     std::string* note) {
+  std::vector<LicenceKey> keys;
+  const std::string ek = strip(env_key);
+  if (!ek.empty()) {
+    const std::string why = diagnose_license_key(ek);
+    if (why.empty())
+      keys.push_back({"ROTOBOT_NEXT_LICENSE_KEY", ek});
+    else if (note)
+      *note = why;
+  }
+  if (!licence_path.empty()) {
+    const std::string sib = licence_path + ".key";
+    std::ifstream kf(sib);
+    std::string line;
+    if (kf && std::getline(kf, line)) {
+      line = strip(line);
+      // The same key twice would only double the work and the log lines.
+      if (!line.empty() && (keys.empty() || keys.front().key != line))
+        keys.push_back({sib, line});
+    }
+  }
+  return keys;
+}
+
+std::string key_fingerprint(const std::string& key) {
+  return hex_encode(sha256(key)).substr(0, 8);
+}
+
 bool b64_decode(const std::string& in, std::string& out) {
   return b64_decode_impl(in, out, /*url=*/false);
 }
