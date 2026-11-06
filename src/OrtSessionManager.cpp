@@ -120,6 +120,15 @@ void OrtSessionManager::Handle::Build() {
   accelerator_active_ = false;
 }
 
+bool OrtSessionManager::Handle::FallBackToCpu() {
+  if (!session_ || !accelerator_active_) return false;
+  Impl& impl = *mgr_->impl_;
+  Ort::SessionOptions cpu_so = BaseOptions(cfg_);
+  session_ = MakeModelSession(impl.env, cfg_.model_path, cpu_so);
+  accelerator_active_ = false;
+  return true;
+}
+
 Ort::Session& OrtSessionManager::Handle::Get() {
   if (!session_) Build();
   if (!session_) throw std::runtime_error("OrtSessionManager: session unavailable: " +

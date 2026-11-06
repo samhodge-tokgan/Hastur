@@ -5,8 +5,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 
@@ -102,10 +104,35 @@ void Sam3MultiTracker::InitGraph(OrtGraph& g, std::shared_ptr<OrtSessionManager:
     g.out_names.emplace_back(s.GetOutputNameAllocated(i, alloc).get());
 }
 
+namespace {
+// A graph the accelerator accepted when its session was created can still fail
+// when it RUNS: ORT 1.27's WebGPU provider builds the G5 session but has no
+// antialiased Resize, which only surfaces on the first Run. On macOS such a
+// graph moves to the CPU, once, and the call is repeated. Elsewhere the error
+// propagates exactly as before -- a CUDA failure mid-clip is not silently
+// turned into a CPU run that takes hours.
+template <class F>
+auto RunOrCpu(OrtSessionManager::Handle& h, F&& run) -> decltype(run(h.Get())) {
+#ifdef __APPLE__
+  try {
+    return run(h.Get());
+  } catch (const Ort::Exception& e) {
+    const std::string what = e.what();
+    if (!h.FallBackToCpu()) throw;
+    std::fprintf(stderr, "[Sam3Multi] %s: %s cannot run this graph (%s); it runs on the CPU from here\n",
+                 std::filesystem::path(h.model_path()).filename().string().c_str(),
+                 AcceleratorSubstr(), what.c_str());
+    return run(h.Get());
+  }
+#else
+  return run(h.Get());
+#endif
+}
+}  // namespace
+
 std::vector<Sam3MultiTracker::Tensor> Sam3MultiTracker::RunFloat(
     OrtGraph& g, const std::vector<std::pair<std::string, const Tensor*>>& feeds,
     const std::vector<std::string>& wants) {
-  Ort::Session& s = g.h->Get();
   std::vector<Ort::Value> ins;
   std::vector<const char*> in_names;
   for (const auto& name : g.in_names) {
@@ -131,8 +158,10 @@ std::vector<Sam3MultiTracker::Tensor> Sam3MultiTracker::RunFloat(
       out_names.push_back(found->c_str());
     }
   }
-  auto res = s.Run(Ort::RunOptions{nullptr}, in_names.data(), ins.data(), ins.size(),
-                   out_names.data(), out_names.size());
+  auto res = RunOrCpu(*g.h, [&](Ort::Session& s) {
+    return s.Run(Ort::RunOptions{nullptr}, in_names.data(), ins.data(), ins.size(),
+                 out_names.data(), out_names.size());
+  });
   std::vector<Tensor> out;
   for (auto& v : res) {
     Tensor t;
@@ -280,7 +309,6 @@ void Sam3MultiTracker::G1(const Tensor& image) {
 
 std::vector<Sam3MultiTracker::Tensor> Sam3MultiTracker::G2() {
   if (dev_handoff_) return G2Bound();
-  Ort::Session& s = g2_.h->Get();
   std::vector<Ort::Value> ins;
   std::vector<const char*> names;
   auto addf = [&](const char* nm, const Tensor& t) {
@@ -304,8 +332,10 @@ std::vector<Sam3MultiTracker::Tensor> Sam3MultiTracker::G2() {
   }
   std::vector<const char*> out_names;
   for (const auto& n : g2_.out_names) out_names.push_back(n.c_str());
-  auto res = s.Run(Ort::RunOptions{nullptr}, names.data(), ins.data(), ins.size(),
-                   out_names.data(), out_names.size());
+  auto res = RunOrCpu(*g2_.h, [&](Ort::Session& s) {
+    return s.Run(Ort::RunOptions{nullptr}, names.data(), ins.data(), ins.size(),
+                 out_names.data(), out_names.size());
+  });
   std::vector<Tensor> out;
   for (auto& v : res) {
     Tensor t;
@@ -320,7 +350,6 @@ std::vector<Sam3MultiTracker::Tensor> Sam3MultiTracker::G2() {
 Sam3MultiTracker::Tensor Sam3MultiTracker::G3(const Tensor& src, const Tensor& src_pos,
                                               const Tensor& prompt, const Tensor& prompt_pos,
                                               int64_t n_optr) {
-  Ort::Session& s = g3_.h->Get();
   std::vector<Ort::Value> ins;
   std::vector<const char*> names;
   auto add = [&](const char* nm, const Tensor& t) {
@@ -347,7 +376,9 @@ Sam3MultiTracker::Tensor Sam3MultiTracker::G3(const Tensor& src, const Tensor& s
     } else throw std::runtime_error("G3 unexpected input " + nm);
   }
   const char* out_names[] = {g3_.out_names[0].c_str()};
-  auto res = s.Run(Ort::RunOptions{nullptr}, names.data(), ins.data(), ins.size(), out_names, 1);
+  auto res = RunOrCpu(*g3_.h, [&](Ort::Session& s) {
+    return s.Run(Ort::RunOptions{nullptr}, names.data(), ins.data(), ins.size(), out_names, 1);
+  });
   Tensor t;
   t.shape = res[0].GetTensorTypeAndShapeInfo().GetShape();
   const float* pd = res[0].GetTensorData<float>();
