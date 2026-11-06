@@ -59,6 +59,11 @@ class OrtSessionManager {
     bool accelerator_active() const noexcept { return accelerator_active_; }
     const std::string& last_error() const noexcept { return last_error_; }
     const std::string& model_path() const noexcept { return cfg_.model_path; }
+    // Rebuild this session on the CPU provider after the accelerator failed to
+    // RUN it (as opposed to failing to create it, which Build() already handles).
+    // Returns false, leaving the session as it was, when it was not running on an
+    // accelerator in the first place -- the caller then rethrows.
+    bool FallBackToCpu();
 
    private:
     friend class OrtSessionManager;
