@@ -19,9 +19,9 @@ host coexistence:
   OFX stream needs a **CPU/GPU software rasterizer** (mesh → image). That is an added
   runtime dependency (and code surface) beyond ONNX Runtime — track its own isolation /
   symbol-visibility story so it does not leak or clash inside the host process.
-- **CUDA runners must be re-registered.** The self-hosted GPU runner set (`rocky8-gpu`,
-  `winbox-3090`) currently serves **humbaba** and has to be **re-registered to this repo**
-  before `gpu-smoke` runs here. See `docs/CI_RUNNERS.md`.
+- **No GPU in CI.** This repo's CI has no GPU runner (it is public; see
+  `docs/CI_RUNNERS.md`), so GPU inference is verified with the standalone smoke tests on a
+  GPU host, not in CI.
 
 ---
 

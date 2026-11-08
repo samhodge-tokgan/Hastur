@@ -138,6 +138,9 @@ class SealedTree {
 
   bool sealed() const { return sealed_; }
   const std::string& dir() const { return dir_; }
+  // Where the key that opened this tree came from (license::LicenceKey::source),
+  // when open_from_env() opened it; empty otherwise. --check-models prints it.
+  const std::string& key_source() const { return key_source_; }
 
   // Is `logical` present? Replaces the std::filesystem::exists() probes that
   // pick fp16 variants — those cannot work against derived names.
@@ -179,6 +182,7 @@ class SealedTree {
   std::string dir_;
   Key ck_;
   std::string scratch_;  // /dev/shm/... when materialise() was used (Linux-only)
+  std::string key_source_;
 };
 
 // ---- sealing (Tokgan-side) ------------------------------------------------

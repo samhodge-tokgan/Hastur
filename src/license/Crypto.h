@@ -24,6 +24,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace rotobot {
 namespace license {
@@ -41,6 +42,36 @@ std::string strip(const std::string& s);
 // the operator hunting for a corrupt licence or a mismatched pair. Observed on
 // the rocky8 install, 2026-09-11.
 std::string diagnose_license_key(const std::string& key);
+
+// A key that might open an offline licence, and where it came from.
+struct LicenceKey {
+  std::string source;  // "ROTOBOT_NEXT_LICENSE_KEY", or the path of <licence>.key
+  std::string key;
+  bool from_env() const { return source == "ROTOBOT_NEXT_LICENSE_KEY"; }
+};
+
+// The keys to try for the licence at `licence_path`, in order: the value of
+// ROTOBOT_NEXT_LICENSE_KEY (`env_key`, passed in so this file stays free of
+// getenv), then the sibling `<licence_path>.key`.
+//
+// BOTH, not "the variable, or else the file". The variable used to win
+// outright, so a stale key left in a shell profile from a first command-line
+// test silently replaced a correct .lic.key: the licence check failed with
+// "AES-GCM decrypt failed (wrong key or tampered)" while the pair the customer
+// had been sent was fine (a customer install, 2026-11-02). Callers try each in turn and
+// say so when the variable was the wrong one (licence_env_key_mismatch).
+//
+// Both are trimmed: a key pasted from a Windows editor carries a CR that is
+// invisible in a terminal and fatal to AES-GCM. An env value that is a PATH is
+// skipped, with diagnose_license_key's explanation in `*note`.
+std::vector<LicenceKey> licence_keys(const std::string& licence_path,
+                                     const std::string& env_key,
+                                     std::string* note = nullptr);
+
+// First 8 hex characters of SHA-256(key): enough for support to tell two keys
+// apart ("is this the key we sent?") without the key itself appearing in a
+// log, a screenshot or a chat.
+std::string key_fingerprint(const std::string& key);
 
 // ---- encoding ----
 // Was decode-only until model sealing (#43) needed to WRITE an envelope.

@@ -9,8 +9,9 @@ on:
 
 # Build/packaging CI for the SAM 3D Body (Hastur) OFX plugin. Ported from humbaba.
 # Validates the .ofx bundle build + layout + OFX-symbol isolation + that the CUDA EP is
-# compiled into the bundled ONNX Runtime on all three platforms. Real GPU inference is
-# exercised by the self-hosted gpu-smoke job.
+# compiled into the bundled ONNX Runtime on all three platforms. GitHub-hosted runners have
+# no GPU and this public repo has no self-hosted runners, so real GPU inference is NOT
+# exercised here (see docs/CI_RUNNERS.md).
 
 jobs:
   sanity:
@@ -107,7 +108,7 @@ jobs:
     runs-on: ubuntu-latest
     # Build inside AlmaLinux 8 (glibc 2.28) so the .ofx loads on RHEL/Rocky/Alma 8 (the
     # VFX Reference Platform). ubuntu-latest links GLIBC_2.34 symbols that EL8 lacks.
-    # GPU inference is verified separately on a self-hosted CUDA box (see docs/LINUX.md).
+    # No GPU here: GPU inference is not exercised by this CI (see docs/CI_RUNNERS.md).
     container: quay.io/pypa/manylinux_2_28_x86_64
     steps:
       - uses: actions/checkout@v4
@@ -184,8 +185,8 @@ jobs:
     runs-on: windows-2022     # pin: has VS 2022 for the "Visual Studio 17 2022" generator.
                               # CPU-only runner: validates the MSVC build, Win64
                               # bundle layout, and that the CUDA-enabled ORT links.
-                              # Actual GPU inference is verified on a self-hosted
-                              # CUDA box (see docs/WINDOWS.md).
+                              # GPU inference is not exercised by this CI
+                              # (see docs/CI_RUNNERS.md).
     steps:
       - uses: actions/checkout@v4
 
@@ -266,58 +267,3 @@ jobs:
           name: Sam3dBody-ofx-bundle-windows
           path: build/Sam3dBody.ofx.bundle
           if-no-files-found: error
-
-  gpu-smoke:
-    name: GPU inference smoke (self-hosted CUDA)
-    # Runs on a self-hosted box with an NVIDIA GPU (CUDA 12.x, cuDNN 9 on the loader
-    # path). GitHub-hosted runners have no GPU, so this is the only job that exercises
-    # ACTUAL CUDA. The `cuda` label may be on a Windows box (RTX 3090s, VS 2022) or a
-    # Rocky Linux 8 box — the steps below branch on runner.os so either can service it.
-    # See docs/CI_RUNNERS.md for runner setup (the runners currently serve humbaba and
-    # must be (re-)registered to this repo).
-    # TODO(M9): drop this gate once the CUDA runners are registered to Hastur. Until then
-    # this job is manual-only (workflow_dispatch) so it does not queue forever on push/PR.
-    if: ${{ github.event_name == 'workflow_dispatch' }}
-    runs-on: [self-hosted, cuda]
-    steps:
-      - uses: actions/checkout@v4
-
-      # ---- Build ort_check (one step per OS) ----
-      - name: Build ort_check (Windows, VS 2022)
-        # Windows PowerShell 5.1 (powershell.exe, always in System32) — the runner
-        # service account (NETWORK SERVICE) has no pwsh (PowerShell 7) on its PATH.
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DHASTUR_WITH_ONNX=ON
-          cmake --build build --config Release --target ort_check --parallel
-
-      - name: Build ort_check (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          cmake -S . -B build -DHASTUR_WITH_ONNX=ON -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --target ort_check -j"$(nproc)"
-
-      # ---- Smoke: run ort_check (one step per OS) ----
-      # TODO(M9): replace with golden_invariant.py geometric check. Hastur has no
-      # depth-mean golden (SAM 3D Body outputs a mesh, not a depth map), so the parity
-      # assertion from humbaba does not apply. For now this just confirms ort_check
-      # builds and runs on the GPU host (provider listing / CUDA EP presence); the real
-      # geometric invariant check on a recovered mesh lands with the inference stages.
-      - name: Run ort_check smoke (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          $out = (& build/Release/ort_check.exe --help | Out-String)
-          Write-Host $out
-          Write-Host "GPU smoke placeholder OK (ort_check built + ran)."
-
-      - name: Run ort_check smoke (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          # ort_check has BUILD_RPATH=${ORT_DIR}/lib so it resolves the ORT + CUDA
-          # provider libs directly; no bundle assembly needed for this smoke.
-          ./build/ort_check --help || true
-          echo "GPU smoke placeholder OK (ort_check built + ran)."
