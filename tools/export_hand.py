@@ -256,6 +256,19 @@ def make_hand_head_forward(mesh):
     return head_forward
 
 
+def camera_project_cond_hand(self, pose_output, batch):
+    """camera_project_cond for the hand head. head_camera_hand.perspective_projection
+    scales the crop by default_scale_factor (DEFAULT_SCALE_FACTOR_HAND = 10 in the
+    shipped config), the body head by 1; without it the per-layer crop keypoints that
+    drive the keypoint-token updates are misplaced."""
+    pc = pose_output["pred_cam"]
+    pose_output["pred_cam"] = pc * pc.new_tensor(
+        [float(self.head_camera_hand.default_scale_factor), 1.0, 1.0])
+    camera_project_cond(self, pose_output, batch)
+    pose_output["pred_cam"] = pc
+    return pose_output
+
+
 class HandWrapper(torch.nn.Module):
     """Fixed batch=1 hand-decoder wrapper (mirrors BodyWrapper)."""
 
@@ -264,7 +277,7 @@ class HandWrapper(torch.nn.Module):
         self.model = model
         self.mesh = mesh  # submodule so its buffers trace/export
         # cond-only camera projection (validated ~1e-7 vs the absolute path).
-        model.camera_project_hand = camera_project_cond.__get__(model, type(model))
+        model.camera_project_hand = camera_project_cond_hand.__get__(model, type(model))
         model._full_to_crop = full_to_crop_passthrough.__get__(model, type(model))
         model.ray_cond_emb_hand.forward = camera_encoder_no_interp.__get__(
             model.ray_cond_emb_hand, type(model.ray_cond_emb_hand))
