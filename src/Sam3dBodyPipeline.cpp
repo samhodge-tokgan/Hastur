@@ -73,6 +73,32 @@ Mat3 Mat3Mul(const Mat3& a, const Mat3& b) {  // a * b
     }
   return r;
 }
+// Wrist IK (reference run_inference "Doing IK"): the hand decoder's wrist becomes the body's
+// local wrist rotation. XZY intrinsic euler of R = Rx(x) Rz(z) Ry(y) (== roma.rotmat_to_euler("XZY")),
+// then mhr_utils.fix_wrist_euler: take the (x+pi, -(z+pi), y+pi) alternative when it violates the
+// joint limits less.
+std::array<float, 3> WristEulerXZY(const Mat3& R) {
+  const float z = std::asin(std::clamp(-R[1], -1.f, 1.f));
+  const float x = std::atan2(R[7], R[4]);
+  const float y = std::atan2(R[2], R[0]);
+  auto wrap = [](float v) { return std::atan2(std::sin(v), std::cos(v)); };
+  auto viol = [](float v, float lo, float hi) {
+    const float b = std::max(lo - v, 0.f), a = std::max(v - hi, 0.f);
+    return b * b + a * a;
+  };
+  const float pi = 3.14159265358979f;
+  const float xa = wrap(x + pi), za = wrap(-(z + pi)), ya = wrap(y + pi);
+  const float vo = viol(x, -2.2f, 1.0f) + viol(z, -2.2f, 1.5f) + viol(y, -1.2f, 1.5f);
+  const float va = viol(xa, -2.2f, 1.0f) + viol(za, -2.2f, 1.5f) + viol(ya, -1.2f, 1.5f);
+  return va < vo ? std::array<float, 3>{xa, za, ya} : std::array<float, 3>{x, z, y};
+}
+
+// Wrist IK is on unless HASTUR_HAND_IK=0.
+bool HandIkEnabled() {
+  const char* v = std::getenv("HASTUR_HAND_IK");
+  return !(v && v[0] == '0');
+}
+
 // rotation_angle_difference(A,B) = acos((trace(A B^T) - 1)/2).
 float RotAngleDiff(const Mat3& A, const Mat3& B) {
   float tr = 0.f;
@@ -536,6 +562,8 @@ bool Sam3dBodyPipeline::Impl::RefineHands(PersonResult& person, const float* rgb
 
   // Per-side accumulation for the shared-shape/scale averaging.
   bool apply[2] = {false, false};
+  Mat3 fused_keep[2]{};
+  bool fused_have[2] = {false, false};
   std::array<float, 54> hand54[2]{};
   float hand_scale_coeff[2] = {0, 0};             // body pred scale[8]/[9]
   std::array<float, 10> shared_scale[2]{};        // pred scale[18:28]
@@ -613,6 +641,8 @@ bool Sam3dBodyPipeline::Impl::RefineHands(PersonResult& person, const float* rgb
       Mat3 fused = Mat3MulT_A(wrist_zero, pred_wrist);
       ang = RotAngleDiff(wg.ori_local[side], fused);
       angle_ok = ang < kWristAngleThresh;
+      fused_keep[side] = fused;
+      fused_have[side] = true;
     }
     if (std::getenv("HASTUR_HAND_DEBUG")) {
       std::fprintf(stderr,
@@ -656,6 +686,21 @@ bool Sam3dBodyPipeline::Impl::RefineHands(PersonResult& person, const float* rgb
       if (apply[0]) v += shared_shape[0][i];
       if (apply[1]) v += shared_shape[1][i];
       pred[kShapeOff + 40 + i] = v / denom;
+    }
+  }
+  // Wrist IK. Body pose params (X,Z,Y) = right 31,33,32 / left 41,43,42 are 1-DoF angles stored
+  // as (sin, cos) in the body continuous block: pred[6 + 138 + 2k], k = their slot in the 1-DoF list
+  // (31->7, 32->8, 33->9, 41->11, 42->12, 43->13).
+  if (HandIkEnabled()) {
+    for (int side = 0; side < 2; ++side) {
+      if (!apply[side] || !fused_have[side]) continue;
+      const std::array<float, 3> e = WristEulerXZY(fused_keep[side]);   // X, Z, Y
+      const int kx = side ? 7 : 11, kz = side ? 9 : 13, ky = side ? 8 : 12;
+      const int ks[3] = {kx, kz, ky};
+      for (int a = 0; a < 3; ++a) {
+        pred[kGlobal6D + 138 + 2 * ks[a]] = std::sin(e[a]);
+        pred[kGlobal6D + 138 + 2 * ks[a] + 1] = std::cos(e[a]);
+      }
     }
   }
   return true;
