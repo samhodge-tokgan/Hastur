@@ -51,7 +51,7 @@ Nuke, Resolve, Flame, …). That raises three coupled problems:
   a single bundle.
 
 ### Target design
-**A. Three-platform release matrix.** One workflow, `matrix: [macos-14, ubuntu-latest,
+**A. Three-platform release matrix.** One workflow, `matrix: [macos-15 (deployment target 14.0), ubuntu-latest,
 windows-latest]`, each producing a *model-less* bundle + a native installer:
 
 | Platform | Installer | Notes |

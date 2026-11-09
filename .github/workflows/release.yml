@@ -13,7 +13,7 @@ name: Release
 # their own licensed checkpoints (see docs/MODELS.md). The python export tools those
 # scripts drive live in a Hastur source checkout (point at them via $HASTUR_TOOLS_DIR).
 #
-# Build commands mirror .github/workflows/ci.yml exactly (macos-14 arm64 / manylinux_2_28
+# Build commands mirror .github/workflows/ci.yml exactly (macos-15 arm64, deployment target 14.0 / manylinux_2_28
 # for the EL8 glibc floor / windows-2022 with the custom static-CRT ORT fetched by CMake),
 # and the per-platform isolation asserts (private ORT soname, only-OFX-symbols exported,
 # $ORIGIN runpath, EL8 glibc floor) are carried over from ci.yml.
@@ -34,7 +34,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14        # Apple Silicon (CoreML, arm64)
+          - os: macos-15        # Apple Silicon (CoreML, arm64)
             platform: macos
           - os: ubuntu-latest   # Linux x86-64 (CUDA)
             platform: linux
@@ -44,6 +44,9 @@ jobs:
           - os: windows-2022    # Windows x64 (CUDA) — pinned for the VS 2022 generator.
             platform: windows    # CMake fetches the custom static-CRT ORT (see CMakeLists NOTE(hastur)).
     runs-on: ${{ matrix.os }}
+    # macOS: built on macos-15 (macos-14 was retired) but still for macOS 14 and later.
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
     container: ${{ matrix.container }}   # empty for macOS/Windows (host); AlmaLinux 8 for Linux
     steps:
       - uses: actions/checkout@v4
