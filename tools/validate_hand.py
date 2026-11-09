@@ -112,7 +112,7 @@ def run_parity(img_path=None, onnx_path=None, write=True):
         image, ray32, cond = H.make_onnx_inputs(model, cfg,
                                                 H.build_hand_batch(box, img_path=img_path)[0])
         with torch.no_grad():
-            wp, wwrist = wrap(image, ray32, cond)
+            wp, wwrist, _ = wrap(image, ray32, cond)
         slice_report(label, wp.numpy(), ref["pred"].numpy(), log)
         mad, rel, p = stats(wwrist.numpy(), ref["wrist_global"].numpy())
         log(f"wrist_global[2,3,3] vs reference: max_abs={mad:.3e}, "

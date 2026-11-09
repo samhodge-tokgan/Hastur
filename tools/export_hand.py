@@ -15,6 +15,9 @@
 #                                 [78=left, 42=right] from the in-graph MHR FK --
 #                                 == pose_output["mhr_hand"]["joint_global_rots"]
 #                                 at those joints; drives the wrist-angle gate.)
+#            wrist_kp2d[1,2]     (2-D right-wrist keypoint, mhr70 index 41, crop-
+#                                 normalised to [-0.5, 0.5] of the HAND crop: the
+#                                 wrist prompt of the keypoint-prompted body re-run)
 #
 # This is the direct analogue of tools/export_sam3dbody.py (the body pass). It
 # shares that tool's crop contract (image / ray_cond / condition_info) and all of
@@ -55,7 +58,8 @@ from export_sam3dbody import (  # noqa: E402
 )
 
 DEFAULT_OUT = os.path.join(os.path.dirname(HERE), "models", "sam3dbody_hand.onnx")
-OUTPUT_NAMES = ["pred", "wrist_global"]
+OUTPUT_NAMES = ["pred", "wrist_global", "wrist_kp2d"]
+WRIST_KP = 41  # mhr70 right wrist (run_inference kps_right_wrist_idx)
 
 # MHR skeleton joint indices for the two wrists (sam3d_body.run_inference):
 #   left wrist = 78, right wrist = 42.
@@ -256,6 +260,19 @@ def make_hand_head_forward(mesh):
     return head_forward
 
 
+def camera_project_cond_hand(self, pose_output, batch):
+    """camera_project_cond for the hand head. head_camera_hand.perspective_projection
+    scales the crop by default_scale_factor (DEFAULT_SCALE_FACTOR_HAND = 10 in the
+    shipped config), the body head by 1; without it the per-layer crop keypoints that
+    drive the keypoint-token updates are misplaced."""
+    pc = pose_output["pred_cam"]
+    pose_output["pred_cam"] = pc * pc.new_tensor(
+        [float(self.head_camera_hand.default_scale_factor), 1.0, 1.0])
+    camera_project_cond(self, pose_output, batch)
+    pose_output["pred_cam"] = pc
+    return pose_output
+
+
 class HandWrapper(torch.nn.Module):
     """Fixed batch=1 hand-decoder wrapper (mirrors BodyWrapper)."""
 
@@ -264,7 +281,7 @@ class HandWrapper(torch.nn.Module):
         self.model = model
         self.mesh = mesh  # submodule so its buffers trace/export
         # cond-only camera projection (validated ~1e-7 vs the absolute path).
-        model.camera_project_hand = camera_project_cond.__get__(model, type(model))
+        model.camera_project_hand = camera_project_cond_hand.__get__(model, type(model))
         model._full_to_crop = full_to_crop_passthrough.__get__(model, type(model))
         model.ray_cond_emb_hand.forward = camera_encoder_no_interp.__get__(
             model.ray_cond_emb_hand, type(model.ray_cond_emb_hand))
@@ -294,7 +311,8 @@ class HandWrapper(torch.nn.Module):
                           po["hand"], po["face"] * 0.0], dim=1)
         # wrist global rotmats from the final refined pred.
         _, _, _, wrist_global = self.mesh.forward_hand(pred)
-        return pred, wrist_global
+        wrist_kp2d = po["pred_keypoints_2d"][:, WRIST_KP, :2]
+        return pred, wrist_global, wrist_kp2d
 
 
 # --------------------------------------------------------------------------- #
@@ -361,7 +379,8 @@ def run_reference_hand(model, cfg, batch):
     pred = torch.cat([po["pred_pose_raw"], po["shape"], po["scale"],
                       po["hand"], po["face"] * 0.0], dim=1)
     wrist = po["joint_global_rots"][:, WRIST_JOINT_IDXS]  # (B,2,3,3)
-    return {"pred": pred, "wrist_global": wrist,
+    wkp = type(model)._full_to_crop(model, batch, po["pred_keypoints_2d"][:, [WRIST_KP], :2])[:, 0]
+    return {"pred": pred, "wrist_global": wrist, "wrist_kp2d": wkp,
             "hand": po["hand"], "scale": po["scale"], "shape": po["shape"]}
 
 
@@ -460,7 +479,7 @@ def write_sidecars(out, model):
             "ray_cond": [1, 2, 32, 32],
             "condition_info": [1, 3],
         },
-        "outputs": {"pred": [1, 519], "wrist_global": [1, 2, 3, 3]},
+        "outputs": {"pred": [1, 519], "wrist_global": [1, 2, 3, 3], "wrist_kp2d": [1, 2]},
         "crop": {"padding": 0.9, "imagenet_norm": True, "left_hand": "H-flip"},
         "wrist_joint_idxs": {"left": 78, "right": 42},
         "merge": "replace_hands_in_pose; wrist-angle (1.4 rad) + box-size (64px) gated",

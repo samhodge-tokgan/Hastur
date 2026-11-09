@@ -22,6 +22,7 @@
 #include <array>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "MeshTypes.h"  // hastur::CropInputs, ComputeUnits
 
@@ -33,6 +34,10 @@ namespace hastur {
 struct HandPrediction {
   std::array<float, kParamDim> pred{};                 // 519
   std::array<std::array<float, 9>, 2> wrist_global{};  // [L,R] row-major 3x3
+  // Right-wrist 2-D keypoint (mhr70 41), crop-normalised [-0.5,0.5] of the HAND
+  // crop; only in graphs exported with it (keypoint-prompted re-run).
+  std::array<float, 2> wrist_kp2d{};
+  bool has_wrist_kp2d{false};
   bool valid{false};
 };
 
@@ -54,6 +59,49 @@ class HandRefinerEngine {
   bool accelerator_active() const;
   static bool AcceleratorAvailable();
 
+  const std::string& last_error() const { return last_error_; }
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+  std::string last_error_;
+};
+
+// KeypointPromptEngine -- sam3dbody_prompt.onnx (tools/export_prompt.py): the
+// body decoder re-run with keypoint prompts and the first-pass estimate
+// (SAM-3D-Body run_inference -> run_keypoint_prompt). Decoder only:
+//
+//   inputs : image_embeddings[1,1280,32,32] (BodyPrediction::image_embeddings)
+//            ray_cond[1,2,32,32], condition_info[1,3] (the BODY crop)
+//            keypoints[1,4,3]   (x, y in [0,1] of the body crop, label) for
+//                               [R wrist 41, L wrist 62, R elbow 8, L elbow 7];
+//                               unused slot = [0, 0, -2]
+//            prev_estimate[1,522] (first-pass pred[519] ++ pred_cam[3])
+//   outputs: pred[1,519]  pred_cam[1,3]
+//
+// Optional like the hand refiner: absent graph = no re-run.
+struct PromptRerun {
+  std::array<float, kParamDim> pred{};
+  std::array<float, 3> pred_cam{};
+  bool valid{false};
+};
+
+class KeypointPromptEngine {
+ public:
+  static constexpr int kNumPrompts = 4;
+  KeypointPromptEngine(const std::string& model_path, ComputeUnits units,
+                       int intra_threads);
+  ~KeypointPromptEngine();
+  KeypointPromptEngine(const KeypointPromptEngine&) = delete;
+  KeypointPromptEngine& operator=(const KeypointPromptEngine&) = delete;
+
+  PromptRerun Run(const std::vector<float>& image_embeddings,
+                  const CropInputs& body_crop,
+                  const std::array<float, 3 * kNumPrompts>& keypoints,
+                  const std::array<float, kParamDim>& pred,
+                  const std::array<float, 3>& pred_cam);
+
+  bool ok() const;
   const std::string& last_error() const { return last_error_; }
 
  private:

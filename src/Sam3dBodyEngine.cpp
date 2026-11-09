@@ -268,6 +268,13 @@ BodyPrediction Sam3dBodyEngine::Run(const CropInputs& in) {
   ok &= CopyOutput(impl_->output_names, results, "hand_box",
                    out.hand_box[0].data(), 8);
   if (!ok) last_error_ = "missing/short output tensor";
+  // Optional keypoint-prompt outputs (absent in older graphs).
+  out.has_kp2d = CopyOutput(impl_->output_names, results, "kp2d", out.kp2d.data(),
+                            kNumKeypoints * 2);
+  out.image_embeddings.resize(static_cast<size_t>(kEmbedDim) * kTokenGrid * kTokenGrid);
+  if (!CopyOutput(impl_->output_names, results, "image_embeddings",
+                  out.image_embeddings.data(), out.image_embeddings.size()))
+    out.image_embeddings.clear();
   return out;
 }
 
