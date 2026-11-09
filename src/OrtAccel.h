@@ -55,11 +55,14 @@ inline bool AcceleratorAvailable() {
 
 // Append the platform accelerator EP to `so`. On macOS this is CoreML (using the
 // given CoreML options) or WebGPU (see AppleUsesWebGpu; the CoreML options are
-// then unused); on Linux/Windows it is CUDA (device 0). Throws
-// Ort::Exception on failure — callers catch and fall back to CPU.
+// then unused); on Linux/Windows it is CUDA device `cuda_device` (the ordinal
+// among the visible devices). Throws Ort::Exception on failure — callers catch
+// and fall back to CPU.
 inline void AppendAccelerator(Ort::SessionOptions& so, const char* coreml_units,
-                              bool coreml_static, bool coreml_mlprogram = true) {
+                              bool coreml_static, bool coreml_mlprogram = true,
+                              int cuda_device = 0) {
 #ifdef __APPLE__
+  (void)cuda_device;
   if (AppleUsesWebGpu()) {
     so.AppendExecutionProvider("WebGPU", {});
     return;
@@ -74,7 +77,7 @@ inline void AppendAccelerator(Ort::SessionOptions& so, const char* coreml_units,
   (void)coreml_static;
   (void)coreml_mlprogram;
   OrtCUDAProviderOptions cuda{};
-  cuda.device_id = 0;
+  cuda.device_id = cuda_device;
   so.AppendExecutionProvider_CUDA(cuda);
 #endif
 }

@@ -70,8 +70,9 @@ struct Det {
 
 class Sam3MultiTracker {
  public:
+  // `device`: the CUDA device ordinal for every graph (ignored by CoreML/CPU).
   Sam3MultiTracker(const MultiPaths& paths, Ep ep = Ep::Auto,
-                   ComputeUnits units = ComputeUnits::All);
+                   ComputeUnits units = ComputeUnits::All, int device = 0);
   ~Sam3MultiTracker();
   Sam3MultiTracker(const Sam3MultiTracker&) = delete;
   Sam3MultiTracker& operator=(const Sam3MultiTracker&) = delete;
@@ -176,6 +177,7 @@ class Sam3MultiTracker {
   OrtGraph g1_, g2_, g3_, g4_, g5_;
   Ort::MemoryInfo mem_info_;
   bool accel_active_ = false;
+  int device_ = 0;  // CUDA device ordinal
 
   Tensor tpos_, no_mem_, proj_w_, proj_b_, lang_feats_;
   std::vector<uint8_t> lang_mask_bool_;  // [1,32] bool
