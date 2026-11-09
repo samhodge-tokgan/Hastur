@@ -37,6 +37,7 @@ inline constexpr int kNumJoints      = 127;   // MHR skeleton joints
 inline constexpr int kNumKeypoints   = 70;    // mhr70 (first 70 of 308)
 inline constexpr int kNumKptAll      = 308;   // keypoint_mapping rows
 inline constexpr int kParamDim       = 519;   // MHR-head output vector
+inline constexpr int kEmbedDim       = 1280;  // backbone channels (image_embeddings)
 
 // MHR-head 519-d parameter block layout (mhr_head.py:57-64).
 // [ global6d(6) | body_cont(260) | shape(45) | scale(28) | hands(108=2x54) | expr(72, zeroed) ]
@@ -107,6 +108,13 @@ struct BodyPrediction {
   std::array<float, 3> pred_cam{};
   std::array<std::array<float, 2>, 2> hand_logits{};
   std::array<std::array<float, 4>, 2> hand_box{};
+  // Optional outputs of body graphs exported for the keypoint-prompted re-run
+  // (tools/export_sam3dbody.py); empty / false with older graphs.
+  //   image_embeddings: [1280,32,32] backbone + no-mask embed, pre ray conditioning.
+  //   kp2d:             [70,2] final-layer 2-D keypoints, crop-normalised [-0.5,0.5].
+  std::vector<float> image_embeddings;
+  std::array<float, kNumKeypoints * 2> kp2d{};
+  bool has_kp2d{false};
 };
 
 // ---------------------------------------------------------------------------

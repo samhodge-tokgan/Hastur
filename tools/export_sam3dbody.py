@@ -9,6 +9,11 @@
 #            ray_cond[1,2,32,32]  (token-grid ray directions; see note below)
 #            condition_info[1,3]  (CLIFF cx/f, cy/f, b/f; USE_INTRIN_CENTER)
 #   outputs: pred[1,519]  pred_cam[1,3]  hand_logits[1,2,2]  hand_box[1,2,4]
+#            image_embeddings[1,1280,32,32]  (backbone + no-mask embed, before the
+#                                 ray conditioning: the input of the keypoint-prompt
+#                                 re-run graph, tools/export_prompt.py)
+#            kp2d[1,70,2]         (final-layer 2-D keypoints, crop-normalised to
+#                                 [-0.5, 0.5]; the elbows seed the prompt)
 #
 # The graph fuses: DINOv3-vith16plus backbone (image-only) -> +no-mask embed ->
 # SAM promptable decoder (6 layers, dummy keypoint prompt baked as a constant,
@@ -65,6 +70,16 @@ def _offline_hub_list(*a, **k):
         return []
 torch.hub.list = _offline_hub_list
 
+
+# torch.hub.load also probes github.com for the default branch on every call
+# (_parse_repo_info), even with the repo cached; a GitHub 5xx then kills the export.
+# The cache is keyed owner_name_ref, so resolve the ref locally (default "main").
+def _offline_parse_repo_info(github):
+    repo, _, ref = github.partition(":")
+    owner, name = repo.split("/")
+    return owner, name, ref or "main"
+torch.hub._parse_repo_info = _offline_parse_repo_info
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)  # mhr_common / mhr_meshmodule
 os.environ.setdefault("MOMENTUM_ENABLED", "0")  # force TorchScript MHR path
@@ -76,7 +91,7 @@ DEMO_IMG = os.path.join(REF_ROOT, "notebook/images/dancing.jpg")
 sys.path.insert(0, REF_ROOT)
 
 DEFAULT_OUT = os.path.join(os.path.dirname(HERE), "models", "sam3dbody_body.onnx")
-OUTPUT_NAMES = ["pred", "pred_cam", "hand_logits", "hand_box"]
+OUTPUT_NAMES = ["pred", "pred_cam", "hand_logits", "hand_box", "image_embeddings", "kp2d"]
 
 
 # --------------------------------------------------------------------------- #
@@ -252,7 +267,8 @@ class BodyWrapper(torch.nn.Module):
         pred_cam = po["pred_cam"]
         hand_box = model.bbox_embed(tokens_output).sigmoid()
         hand_logits = model.hand_cls_embed(tokens_output)
-        return pred, pred_cam, hand_logits, hand_box
+        kp2d = po["pred_keypoints_2d"][..., :2]
+        return pred, pred_cam, hand_logits, hand_box, ie, kp2d
 
 
 def _lbs_scatter_add(self, global_skel, unposed):
@@ -340,7 +356,9 @@ def run_reference(model, cfg, batch):
                       po["hand"], po["face"] * 0.0], dim=1)
     return {"pred": pred, "pred_cam": po["pred_cam"],
             "hand_logits": model.hand_cls_embed(tokens_output),
-            "hand_box": model.bbox_embed(tokens_output).sigmoid()}
+            "hand_box": model.bbox_embed(tokens_output).sigmoid(),
+            "image_embeddings": ie[model.body_batch_idx],
+            "kp2d": type(model)._full_to_crop(model, batch, po["pred_keypoints_2d"][..., :2])}
 
 
 # --------------------------------------------------------------------------- #

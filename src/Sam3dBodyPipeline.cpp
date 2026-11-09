@@ -99,6 +99,13 @@ bool HandIkEnabled() {
   return !(v && v[0] == '0');
 }
 
+// Keypoint-prompted body re-run is on (when sam3dbody_prompt.onnx is present)
+// unless HASTUR_HAND_PROMPT=0.
+bool HandPromptEnabled() {
+  const char* v = std::getenv("HASTUR_HAND_PROMPT");
+  return !(v && v[0] == '0');
+}
+
 // rotation_angle_difference(A,B) = acos((trace(A B^T) - 1)/2).
 float RotAngleDiff(const Mat3& A, const Mat3& B) {
   float tr = 0.f;
@@ -307,6 +314,11 @@ struct Sam3dBodyPipeline::Impl {
   std::string hand_path;                        // empty -> refinement disabled
   std::unique_ptr<HandRefinerEngine> hand;      // lazy
   bool hand_tried = false;                      // attempted lazy creation
+  // Keypoint-prompted body re-run (run_keypoint_prompt): optional like the hand
+  // refiner, created lazily on the first person with a merged hand.
+  std::string prompt_path;                      // empty -> no re-run
+  std::unique_ptr<KeypointPromptEngine> prompt; // lazy
+  bool prompt_tried = false;
   int intra_threads = 0;
 
   // joint_rotation[wrist_twist] rotmats for CRITERIA 1: [0]=left(joint77),
@@ -373,6 +385,7 @@ bool Sam3dBodyPipeline::EnsureLoaded(const PipelineParams& p) {
   const std::string pose_path = FindFile(dirs, "pose_corrective.onnx");
   // Hand refiner is OPTIONAL: absence just disables 2nd-pass refinement.
   s.hand_path = FindFile(dirs, "sam3dbody_hand.onnx");
+  s.prompt_path = FindFile(dirs, "sam3dbody_prompt.onnx");
   s.intra_threads = p.intra_threads;
 
   std::string missing;
@@ -564,6 +577,9 @@ bool Sam3dBodyPipeline::Impl::RefineHands(PersonResult& person, const float* rgb
   bool apply[2] = {false, false};
   Mat3 fused_keep[2]{};
   bool fused_have[2] = {false, false};
+  Mat3 pred_wrist_keep[2]{};
+  float wrist_frame[2][2]{};                      // hand-decoder wrist kp, frame px
+  bool wrist_frame_ok[2] = {false, false};
   std::array<float, 54> hand54[2]{};
   float hand_scale_coeff[2] = {0, 0};             // body pred scale[8]/[9]
   std::array<float, 10> shared_scale[2]{};        // pred scale[18:28]
@@ -611,6 +627,19 @@ bool Sam3dBodyPipeline::Impl::RefineHands(PersonResult& person, const float* rgb
     HandPrediction hp = s.hand->Run(hc);
     if (!hp.valid) continue;
 
+    // Hand-decoder wrist keypoint -> frame px (hand crop px via the crop's inverse
+    // affine; the left crop came from the mirrored frame, so un-mirror x).
+    if (hp.has_wrist_kp2d) {
+      const float u = (hp.wrist_kp2d[0] + 0.5f) * S, v = (hp.wrist_kp2d[1] + 0.5f) * S;
+      const std::array<float, 6>& hi = hc.affine_inv;
+      float x = hi[0] * u + hi[1] * v + hi[2];
+      const float y = hi[3] * u + hi[4] * v + hi[5];
+      if (side == 0) x = (W - 1) - x;
+      wrist_frame[side][0] = x;
+      wrist_frame[side][1] = y;
+      wrist_frame_ok[side] = true;
+    }
+
     // Refined hand for THIS crop is always the decoder's RIGHT slot (hand[54:108]).
     for (int i = 0; i < 54; ++i) hand54[side][i] = hp.pred[kHandOff + 54 + i];
 
@@ -629,6 +658,7 @@ bool Sam3dBodyPipeline::Impl::RefineHands(PersonResult& person, const float* rgb
     if (side == 0)
       for (int r = 1; r < 3; ++r)
         for (int c = 0; c < 3; ++c) pred_wrist[r * 3 + c] *= -1.f;
+    pred_wrist_keep[side] = pred_wrist;
 
     // CRITERIA 1: wrist-angle. fused_local = wrist_zero^T * pred_wrist, where
     // wrist_zero = lowarm_global * joint_rotation[wrist_twist]. Compare its angle
@@ -660,6 +690,102 @@ bool Sam3dBodyPipeline::Impl::RefineHands(PersonResult& person, const float* rgb
   if (!apply[0] && !apply[1]) {
     person.has_hands = false;  // nothing merged after gating
     return false;
+  }
+
+  // --- keypoint-prompted body re-run (run_keypoint_prompt) --------------------
+  // Prompts in body-crop coordinates: the hand decoder's wrists and the body's
+  // own elbows, each valid only for a gated hand inside the crop; the re-run body
+  // replaces the first pass, then the hand drop-in and IK apply on top of it.
+  bool reran = false;
+  if (HandPromptEnabled() && !s.prompt_path.empty() && person.pred.has_kp2d &&
+      !person.pred.image_embeddings.empty()) {
+    if (!s.prompt && !s.prompt_tried) {
+      s.prompt_tried = true;
+      try {
+        s.prompt = std::make_unique<KeypointPromptEngine>(s.prompt_path, s.units,
+                                                          s.intra_threads);
+        if (!s.prompt->ok()) {
+          std::fprintf(stderr, "[hastur] keypoint-prompt load failed: %s\n",
+                       s.prompt->last_error().c_str());
+          s.prompt.reset();
+        }
+      } catch (const std::exception& e) {
+        std::fprintf(stderr, "[hastur] keypoint-prompt exception: %s\n", e.what());
+        s.prompt.reset();
+      }
+      if (!s.prompt) s.prompt_path.clear();
+    }
+  }
+  if (s.prompt && HandPromptEnabled() && person.pred.has_kp2d &&
+      !person.pred.image_embeddings.empty()) {
+    const std::array<float, 6>& fa = bcrop.affine;   // frame px -> crop px
+    auto to_crop = [&](float x, float y, float& cx, float& cy) {
+      cx = (fa[0] * x + fa[1] * y + fa[2]) / S - 0.5f;
+      cy = (fa[3] * x + fa[4] * y + fa[5]) / S - 0.5f;
+    };
+    // slots: [R wrist 41, L wrist 62, R elbow 8, L elbow 7]; side 1 = R, 0 = L.
+    const int labels[4] = {41, 62, 8, 7};
+    const int sides[4] = {1, 0, 1, 0};
+    std::array<float, 12> kp{};
+    int n_valid = 0;
+    for (int k = 0; k < 4; ++k) {
+      const int sd = sides[k];
+      float cx = 0.f, cy = 0.f;
+      bool have = apply[sd];
+      if (k < 2) {
+        have = have && wrist_frame_ok[sd];
+        if (have) to_crop(wrist_frame[sd][0], wrist_frame[sd][1], cx, cy);
+      } else {
+        const int j = labels[k];
+        cx = person.pred.kp2d[j * 2];
+        cy = person.pred.kp2d[j * 2 + 1];
+      }
+      have = have && cx >= -0.5f && cx <= 0.5f && cy >= -0.5f && cy <= 0.5f;
+      if (have) {
+        kp[k * 3 + 0] = std::clamp(cx + 0.5f, 0.f, 1.f);
+        kp[k * 3 + 1] = std::clamp(cy + 0.5f, 0.f, 1.f);
+        kp[k * 3 + 2] = static_cast<float>(labels[k]);
+        ++n_valid;
+      } else {
+        kp[k * 3 + 0] = 0.f;
+        kp[k * 3 + 1] = 0.f;
+        kp[k * 3 + 2] = -2.f;  // dummy prompt
+      }
+    }
+    if (n_valid > 0) {
+      PromptRerun rr = s.prompt->Run(person.pred.image_embeddings, bcrop, kp,
+                                     person.pred.pred, person.pred.pred_cam);
+      if (rr.valid) {
+        person.pred.pred = rr.pred;
+        person.pred.pred_cam = rr.pred_cam;
+        reran = true;
+      } else {
+        std::fprintf(stderr, "[hastur] keypoint-prompt run failed: %s\n",
+                     s.prompt->last_error().c_str());
+      }
+    }
+    if (std::getenv("HASTUR_HAND_DEBUG"))
+      std::fprintf(stderr, "[hastur-hand] prompt valid=%d reran=%d\n", n_valid, reran);
+  }
+
+  // Upstream re-checks the wrist angle against the re-run body's forearms (the
+  // first pass's own local wrist stays the reference) and keeps only hands that
+  // still pass; the IK target is re-derived from the re-run forearm too.
+  if (reran && s.wrist_loaded) {
+    MhrModel::WristGate wg2 = s.mhr->ComputeWristGate(person.pred.pred);
+    for (int side = 0; side < 2; ++side) {
+      if (!apply[side]) continue;
+      Mat3 wrist_zero = Mat3Mul(wg2.lowarm_global[side], s.joint_rotation_wrist[side]);
+      fused_keep[side] = Mat3MulT_A(wrist_zero, pred_wrist_keep[side]);
+      fused_have[side] = true;
+      const float ang2 = RotAngleDiff(wg.ori_local[side], fused_keep[side]);
+      if (!(ang2 < kWristAngleThresh) && !std::getenv("HASTUR_HAND_FORCE"))
+        apply[side] = false;
+    }
+    if (!apply[0] && !apply[1]) {
+      person.has_hands = false;
+      return true;  // the body changed (re-run), no hand merged
+    }
   }
 
   // --- merge into the body pred[519] (replace_hands_in_pose) ------------------
@@ -884,6 +1010,7 @@ FrameResult Sam3dBodyPipeline::Run(const float* rgb, int W, int H,
       LogStage("hand-refine", Ms(th, Clock::now()));
       (void)merged;
     }
+    std::vector<float>().swap(person.pred.image_embeddings);  // 5 MB, only the re-run uses it
 
     // 4. pose-corrective ONNX -> per-vertex offsets (cm, pre-flip); stash for pass 2.
     auto tp = Clock::now();
