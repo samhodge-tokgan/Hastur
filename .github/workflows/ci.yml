@@ -16,7 +16,7 @@ on:
 jobs:
   sanity:
     name: Repo sanity
-    runs-on: macos-14   # Apple Silicon runner (arm64)
+    runs-on: ubuntu-latest   # file checks only; no Mac needed
     steps:
       - uses: actions/checkout@v4
 
@@ -48,7 +48,11 @@ jobs:
 
   build:
     name: Build .ofx bundle (ONNX/CoreML, arm64)
-    runs-on: macos-14   # Apple Silicon
+    # Apple Silicon. GitHub retired the macos-14 image (2026-11); the deployment target stays
+    # 14.0 so the plugin still loads on macOS 14 (unset, it would default to the runner's 15).
+    runs-on: macos-15
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
     steps:
       - uses: actions/checkout@v4
 
