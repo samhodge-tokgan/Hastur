@@ -14,7 +14,17 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <cstdlib>
 #include <unordered_map>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -24,6 +34,36 @@ namespace {
 // The engine's input geometry (mirrors Sam3TrackerPlugin's kIn/kLR).
 constexpr int kIn = kMImgSize;  // 1008
 constexpr int kLR = kMLowRes;   // 288
+
+// Bytes the converted-frame cache may hold. Each entry is 3*1008*1008 floats
+// (12.2 MB) whatever the plate resolution, so the cache grows with clip LENGTH:
+// ~0.6 GB for 48 frames, ~14 GB for 1159. Unbounded, that is the one part of
+// the tracker's memory that scales with the job, and on a 16 GB unified-memory
+// machine it is the difference between running and swapping.
+//
+// Default: a quarter of physical memory, which on a large workstation covers
+// any realistic clip (so nothing changes there). HASTUR_FRAME_CACHE_MB
+// overrides it; 0 disables caching. A frame that does not fit is simply
+// decoded and resampled again when revisited -- each frame is visited at most
+// twice (auto-seed scan, then one tracking pass) -- so output is identical.
+size_t FrameCacheBudget() {
+  if (const char* v = std::getenv("HASTUR_FRAME_CACHE_MB")) {
+    char* end = nullptr;
+    const long long mb = std::strtoll(v, &end, 10);
+    if (end != v && mb >= 0) return static_cast<size_t>(mb) << 20;
+  }
+  unsigned long long phys = 0;
+#if defined(_WIN32)
+  MEMORYSTATUSEX ms{};
+  ms.dwLength = sizeof(ms);
+  if (::GlobalMemoryStatusEx(&ms)) phys = ms.ullTotalPhys;
+#else
+  const long pages = ::sysconf(_SC_PHYS_PAGES), page = ::sysconf(_SC_PAGESIZE);
+  if (pages > 0 && page > 0) phys = static_cast<unsigned long long>(pages) * page;
+#endif
+  if (phys == 0) return static_cast<size_t>(-1);  // unknown: behave as before
+  return static_cast<size_t>(phys / 4);
+}
 
 // Bilinear-resample a top-down W*H*3 RGB [0,1] frame to a planar CHW 3*1008*1008
 // buffer, normalized 2*v-1 (mean/std 0.5) as the SAM 3 engine expects. Verbatim
@@ -119,31 +159,42 @@ Sam3VideoTrackResult RunSam3VideoTrack(const MultiPaths& models, const Sam3Frame
 
   // ---- lazily load + convert a frame (idx 0..N-1 -> plate first+idx) to planar
   // CHW, cached for the whole pre-pass (scan/forward/backward revisit frames). ----
+  // Bounded by FrameCacheBudget(); frames past it go through `spill` and are
+  // rebuilt on their next visit. A returned pointer is only used until the next
+  // getFrame call (BeginFrame copies it), so one spill buffer is enough.
   std::unordered_map<int, std::vector<float>> cache;
+  const size_t frame_bytes = static_cast<size_t>(3) * kIn * kIn * sizeof(float);
+  const size_t budget = FrameCacheBudget();
+  size_t cached_bytes = 0;
+  std::vector<float> spill;
   int plateW = 0, plateH = 0;
   std::vector<float> rgb;
   auto getFrame = [&](int idx) -> const std::vector<float>* {
     auto it = cache.find(idx);
     if (it != cache.end()) return it->second.empty() ? nullptr : &it->second;
-    std::vector<float>& slot = cache[idx];  // inserts empty
+    const bool keep = cached_bytes + frame_bytes <= budget;
+    std::vector<float>* slot = keep ? &cache[idx] : &spill;  // cache[] inserts empty
     int W = 0, H = 0;
     if (!source(first + idx, rgb, W, H) || W <= 0 || H <= 0 ||
         rgb.size() < static_cast<size_t>(W) * H * 3) {
       std::fprintf(stderr, "skip: cannot load frame %ld\n", first + idx);
+      if (!keep) cache[idx];  // remember the failure; costs nothing
       return nullptr;
     }
     if (plateW == 0) { plateW = W; plateH = H; }
-    ToPlanarCHW(rgb, W, H, slot);
-    return &slot;
+    ToPlanarCHW(rgb, W, H, *slot);
+    if (keep) cached_bytes += frame_bytes;
+    return slot;
   };
 
   // ---- build the engine (loads G1..G5 + constants; throws on missing assets) ----
   Sam3MultiTracker eng(models, opt.ep, opt.units, opt.device);
   std::fprintf(stderr,
                "[%s] frames %ld..%ld (N=%d) accel=%d score=%.3f nms=%.3f "
-               "bidir=%d\n",
+               "bidir=%d frame-cache=%d of %d\n",
                tag, first, last, N, static_cast<int>(eng.accelerator_active()),
-               scoreThresh, nmsIou, static_cast<int>(opt.bidir));
+               scoreThresh, nmsIou, static_cast<int>(opt.bidir),
+               static_cast<int>(std::min<size_t>(N, budget / frame_bytes)), N);
 
   // ---- seed frame (idx space). -1 => auto max-visibility scan. ----
   int SEED = 0;
