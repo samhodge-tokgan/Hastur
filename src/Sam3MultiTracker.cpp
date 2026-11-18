@@ -13,6 +13,7 @@
 #include <stdexcept>
 
 #include "OrtAccel.h"
+#include "OrtCudaTuning.h"
 
 namespace hastur {
 
@@ -84,6 +85,10 @@ Sam3MultiTracker::Sam3MultiTracker(const MultiPaths& p, Ep ep, ComputeUnits unit
 }
 
 Sam3MultiTracker::~Sam3MultiTracker() {
+  if (CudaTuningFromEnv().memlog > 0) {
+    LogArenas("final");
+    std::fprintf(stderr, "[memlog] distinct G3 prompt lengths: %zu\n", g3_lengths_.size());
+  }
   // Tear the device hand-off down explicitly and in order, rather than relying
   // on member order alone. The bindings reference the sessions, the values were
   // allocated by dev_alloc_, and dev_alloc_ references g1_'s session -- so all
@@ -160,7 +165,7 @@ std::vector<Sam3MultiTracker::Tensor> Sam3MultiTracker::RunFloat(
     }
   }
   auto res = RunOrCpu(*g.h, [&](Ort::Session& s) {
-    return s.Run(Ort::RunOptions{nullptr}, in_names.data(), ins.data(), ins.size(),
+    return s.Run(TunedRunOptions(false, device_), in_names.data(), ins.data(), ins.size(),
                  out_names.data(), out_names.size());
   });
   std::vector<Tensor> out;
@@ -226,7 +231,7 @@ void Sam3MultiTracker::G1Bound(const Tensor& image) {
   bind_g1_->BindInput("image", img);
   for (const char* n : kHostOut) bind_g1_->BindOutput(n, mem_info_);
   for (int i = 0; i < 4; ++i) bind_g1_->BindOutput(kDetOut[i], dev_det_[i]);
-  s.Run(Ort::RunOptions{nullptr}, *bind_g1_);
+  s.Run(TunedRunOptions(false, device_), *bind_g1_);
 
   // Pull the host-bound four back by NAME -- binding order is not a contract.
   auto names = bind_g1_->GetOutputNames();
@@ -262,7 +267,7 @@ std::vector<Sam3MultiTracker::Tensor> Sam3MultiTracker::G2Bound() {
       lang_mask_shape_.data(), lang_mask_shape_.size());
   bind_g2_->BindInput("lang_mask", lm);
   for (const auto& n : g2_.out_names) bind_g2_->BindOutput(n.c_str(), mem_info_);
-  s.Run(Ort::RunOptions{nullptr}, *bind_g2_);
+  s.Run(TunedRunOptions(false, device_), *bind_g2_);
 
   auto names = bind_g2_->GetOutputNames();
   auto vals = bind_g2_->GetOutputValues();
@@ -334,7 +339,7 @@ std::vector<Sam3MultiTracker::Tensor> Sam3MultiTracker::G2() {
   std::vector<const char*> out_names;
   for (const auto& n : g2_.out_names) out_names.push_back(n.c_str());
   auto res = RunOrCpu(*g2_.h, [&](Ort::Session& s) {
-    return s.Run(Ort::RunOptions{nullptr}, names.data(), ins.data(), ins.size(),
+    return s.Run(TunedRunOptions(false, device_), names.data(), ins.data(), ins.size(),
                  out_names.data(), out_names.size());
   });
   std::vector<Tensor> out;
@@ -377,9 +382,22 @@ Sam3MultiTracker::Tensor Sam3MultiTracker::G3(const Tensor& src, const Tensor& s
     } else throw std::runtime_error("G3 unexpected input " + nm);
   }
   const char* out_names[] = {g3_.out_names[0].c_str()};
-  auto res = RunOrCpu(*g3_.h, [&](Ort::Session& s) {
-    return s.Run(Ort::RunOptions{nullptr}, names.data(), ins.data(), ins.size(), out_names, 1);
-  });
+  const int memlog = CudaTuningFromEnv().memlog;
+  std::vector<Ort::Value> res;
+  try {
+    res = RunOrCpu(*g3_.h, [&](Ort::Session& s) {
+      return s.Run(TunedRunOptions(true, device_), names.data(), ins.data(), ins.size(),
+                   out_names, 1);
+    });
+  } catch (const std::exception&) {
+    if (memlog > 0)
+      std::fprintf(stderr, "[memlog] G3 FAILED L=%lld n_ptr=%lld g3 %s\n",
+                   (long long)prompt.shape[0], (long long)n_optr,
+                   CudaArenaStats(g3_.h->Get(), device_).c_str());
+    throw;
+  }
+  if (memlog > 0)
+    std::fprintf(stderr, "[memlog]   g3 %s\n", CudaArenaStats(g3_.h->Get(), device_).c_str());
   Tensor t;
   t.shape = res[0].GetTensorTypeAndShapeInfo().GetShape();
   const float* pd = res[0].GetTensorData<float>();
@@ -479,6 +497,18 @@ void Sam3MultiTracker::BeginFrame(const float* frame_chw1008, int frame_idx, int
   Tensor image; image.shape = {1, 3, kMImgSize, kMImgSize};
   image.data.assign(frame_chw1008, frame_chw1008 + (size_t)3 * kMImgSize * kMImgSize);
   G1(image);
+  if (CudaTuningFromEnv().memlog > 1) LogArenas("frame");
+}
+
+void Sam3MultiTracker::LogArenas(const char* when) {
+  const char* nm[5] = {"g1", "g2", "g3", "g4", "g5"};
+  OrtGraph* gs[5] = {&g1_, &g2_, &g3_, &g4_, &g5_};
+  for (int i = 0; i < 5; ++i) {
+    Ort::Session* s = gs[i]->h ? gs[i]->h->TryGet() : nullptr;
+    if (!s) continue;
+    std::fprintf(stderr, "[memlog] arena %s f=%d %s %s\n", when, cur_frame_idx_, nm[i],
+                 CudaArenaStats(*s, device_).c_str());
+  }
 }
 
 // ---------------------------------------------------------------- detector
@@ -676,6 +706,13 @@ const std::vector<float>& Sam3MultiTracker::PropagateObj(ObjState& obj, bool rev
   }
 
   const int64_t L = (int64_t)prompt.size() / kMMemDim;
+  if (CudaTuningFromEnv().memlog > 0) {
+    const int64_t n_mem = (L - n_optr) / kMHW;
+    g3_lengths_.insert(L);
+    std::fprintf(stderr, "[memlog] G3 f=%d obj=%d dir=%s n_mem=%lld n_ptr=%lld L=%lld\n",
+                 frame_idx, obj.id, reverse ? "bwd" : "fwd", (long long)n_mem,
+                 (long long)(n_optr / kMPtrTokens), (long long)L);
+  }
   Tensor promptT; promptT.shape = {L, 1, kMMemDim}; promptT.data = std::move(prompt);
   Tensor promptPosT; promptPosT.shape = {L, 1, kMMemDim}; promptPosT.data = std::move(prompt_pos);
 

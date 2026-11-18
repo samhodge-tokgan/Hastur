@@ -13,6 +13,8 @@
 
 #include <onnxruntime_cxx_api.h>
 
+#include "OrtCudaTuning.h"
+
 namespace hastur {
 
 // Ort::Session takes a path of type const ORTCHAR_T* — wchar_t on Windows, char on
@@ -78,6 +80,7 @@ inline void AppendAccelerator(Ort::SessionOptions& so, const char* coreml_units,
   (void)coreml_mlprogram;
   OrtCUDAProviderOptions cuda{};
   cuda.device_id = cuda_device;
+  ApplyCudaTuning(cuda, so);  // opt-in memory knobs; a no-op when unset
   so.AppendExecutionProvider_CUDA(cuda);
 #endif
 }

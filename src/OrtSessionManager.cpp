@@ -8,6 +8,7 @@
 #include <stdexcept>
 
 #include "OrtAccel.h"
+#include "OrtCudaTuning.h"
 
 namespace hastur {
 
@@ -94,15 +95,27 @@ void OrtSessionManager::Handle::Build() {
       OrtCUDAProviderOptions cuda{};
       cuda.device_id = cfg_.device;
       cuda.do_copy_in_default_stream = 1;
+      // Opt-in memory knobs (OrtCudaTuning.h); a no-op when none is set.
+      const CudaTuning& tune = CudaTuningFromEnv();
+      ApplyCudaTuning(cuda, so);
+      // HASTUR_ORT_SHARED_ARENA turns on the shared env arena below without a
+      // caller budget; its cap is then HASTUR_ORT_GPU_MEM_LIMIT_MB (0 = none).
+      const bool shared = cfg_.gpu_mem_limit > 0 || tune.shared_arena;
+      const size_t shared_limit =
+          cfg_.gpu_mem_limit > 0 ? cfg_.gpu_mem_limit : tune.gpu_mem_limit;
+      const int shared_extend = (cfg_.gpu_mem_limit == 0 && tune.arena_extend >= 0)
+                                    ? tune.arena_extend : 1;
       if (cfg_.gpu_mem_limit > 0) {
         cuda.gpu_mem_limit = cfg_.gpu_mem_limit;
         cuda.arena_extend_strategy = 1;  // kSameAsRequested — tighter budget
+      }
+      if (shared) {
         if (!impl.cuda_arena_registered) {
           // One shared CUDA arena on the env so every session draws from the
           // same budget rather than each allocating its own.
           OrtArenaCfg* arena_cfg = nullptr;
           Ort::ThrowOnError(Ort::GetApi().CreateArenaCfg(
-              cfg_.gpu_mem_limit, /*arena_extend_strategy=*/1,
+              shared_limit, /*arena_extend_strategy=*/shared_extend,
               /*initial_chunk_size_bytes=*/-1, /*max_dead_bytes_per_chunk=*/-1,
               &arena_cfg));
           OrtMemoryInfo* mem = nullptr;
