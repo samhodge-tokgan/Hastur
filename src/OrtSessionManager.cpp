@@ -59,6 +59,10 @@ struct OrtSessionManager::Impl {
   // A single CUDA arena shared across sessions so the whole pipeline lives
   // inside one GPU memory budget (registered once on the shared env).
   bool cuda_arena_registered = false;
+  // This manager registered the arena (rather than finding one already there),
+  // so it unregisters it on destruction; see ~OrtSessionManager.
+  bool cuda_arena_owned = false;
+  int cuda_arena_device = 0;
 #endif
   explicit Impl(const std::string& log_id)
       : env(ORT_LOGGING_LEVEL_WARNING, log_id.c_str()) {}
@@ -66,7 +70,28 @@ struct OrtSessionManager::Impl {
 
 OrtSessionManager::OrtSessionManager(const std::string& log_id)
     : impl_(std::make_unique<Impl>(log_id)) {}
-OrtSessionManager::~OrtSessionManager() = default;
+OrtSessionManager::~OrtSessionManager() {
+#ifndef __APPLE__
+  // ORT keeps a registered allocator on its process-wide env until the env is
+  // torn down at process exit. Left there, the shared CUDA arena (a) keeps its
+  // reserved device memory after the tracker is gone, so later GPU work in the
+  // same process cannot use it, (b) makes a later CreateAndRegisterAllocator for
+  // CUDA fail with "already registered", and (c) on Windows is destroyed after
+  // onnxruntime_providers_cuda.dll (where its code lives) has been unloaded: an
+  // access violation (0xC0000005) at exit. Unregistering only drops the env's
+  // reference; sessions still holding the arena keep it alive until they go.
+  if (impl_ && impl_->cuda_arena_owned) {
+    OrtMemoryInfo* mem = nullptr;
+    OrtStatus* st = Ort::GetApi().CreateMemoryInfo("Cuda", OrtArenaAllocator,
+                                                   impl_->cuda_arena_device,
+                                                   OrtMemTypeDefault, &mem);
+    if (!st)
+      st = Ort::GetApi().UnregisterAllocator(static_cast<OrtEnv*>(impl_->env), mem);
+    if (st) Ort::GetApi().ReleaseStatus(st);
+    if (mem) Ort::GetApi().ReleaseMemoryInfo(mem);
+  }
+#endif
+}
 
 Ort::Env& OrtSessionManager::env() { return impl_->env; }
 
@@ -129,7 +154,10 @@ void OrtSessionManager::Handle::Build() {
             st = Ort::GetApi().CreateAndRegisterAllocatorV2(
                 static_cast<OrtEnv*>(impl.env), "CUDAExecutionProvider", mem, arena_cfg,
                 /*keys=*/nullptr, /*values=*/nullptr, /*num_keys=*/0);
-          if (st) {
+          if (!st) {
+            impl.cuda_arena_owned = true;
+            impl.cuda_arena_device = cfg_.device;
+          } else {
             if (tune.overridden || tune.memlog > 0)
               std::fprintf(stderr, "[hastur] shared CUDA arena not registered: %s\n",
                            Ort::GetApi().GetErrorMessage(st));
