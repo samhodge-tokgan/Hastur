@@ -1,28 +1,35 @@
 // Copyright the Hastur authors.
 // SPDX-License-Identifier: LicenseRef-SAM-License
 //
-// Opt-in CUDA execution-provider memory knobs, read once from the environment,
-// plus the arena-statistics helpers used to measure them.
+// CUDA execution-provider memory settings, with environment overrides, plus
+// the arena-statistics helpers used to measure them.
 //
-// Every knob is OFF by default. With none of these variables set, the provider
-// options, session options and run options are exactly what they were before
-// this header existed, so outputs are unchanged.
+// Defaults (CUDA only; CoreML, WebGPU and CPU sessions are untouched):
+//   * the memory-pattern planner is OFF. With dynamic input shapes (the
+//     tracker's G3 sees up to 15 distinct prompt lengths a clip) it keeps one
+//     pre-planned block per shape, and the arena never returns them: on a
+//     3-person 4K 35-frame test plate the G3 arena reserved 13.3 GB for a
+//     1.1 GB working set, and the tracker peaked at 24.3 GB.
+//   * the five tracker graphs share ONE env-registered CUDA arena instead of
+//     holding five, so their high-water marks no longer add up.
+// Together: tracker peak 24.3 -> 4.0 GB, export 7.0 -> 5.0 GB, same speed,
+// tracks.txt and every mask byte-identical (RTX A6000, three clips).
 //
+// Overrides:
+//   HASTUR_ORT_MEM_PATTERN=1               restore the memory-pattern planner
+//   HASTUR_ORT_SHARED_ARENA=0              one arena per tracker graph again
 //   HASTUR_ORT_ARENA_EXTEND=same|pow2      arena_extend_strategy (kSameAsRequested /
 //                                          kNextPowerOfTwo)
 //   HASTUR_ORT_CONV_SEARCH=heuristic|default|exhaustive
 //                                          cudnn_conv_algo_search
-//   HASTUR_ORT_MEM_PATTERN=0               SessionOptions::DisableMemPattern
 //   HASTUR_ORT_GPU_MEM_LIMIT_MB=N          gpu_mem_limit for each CUDA arena (or for the
-//                                          shared arena when that is on)
-//   HASTUR_ORT_SHARED_ARENA=1              the sessions of one OrtSessionManager (the
-//                                          tracker's five graphs) draw from one
-//                                          env-registered CUDA arena instead of five
+//                                          shared arena)
 //   HASTUR_ORT_SHRINK=g3|all               run option memory.enable_memory_arena_shrinkage
 //                                          on the tracker's G3 runs, or on all of them
 //   HASTUR_TRACK_MEMLOG=1|2                tracker log: per G3 call the prompt length L
 //                                          (n_mem, n_ptr) and the G3 arena state; 2 adds
 //                                          all five arenas once per frame
+// HASTUR_ORT_MEM_PATTERN=1 HASTUR_ORT_SHARED_ARENA=0 is the pre-change behaviour.
 #pragma once
 
 #include <cstdio>
@@ -37,15 +44,12 @@ namespace hastur {
 struct CudaTuning {
   int arena_extend = -1;    // -1 unset, 0 kNextPowerOfTwo, 1 kSameAsRequested
   int conv_search = -1;     // -1 unset, else OrtCudnnConvAlgoSearch
-  bool no_mem_pattern = false;
+  bool no_mem_pattern = true;   // default: planner off (see above)
   size_t gpu_mem_limit = 0;  // bytes, 0 = unset
-  bool shared_arena = false;
+  bool shared_arena = true;     // default: one arena per OrtSessionManager
   int shrink = 0;           // 0 off, 1 G3 only, 2 every tracker graph
   int memlog = 0;
-  bool any() const {
-    return arena_extend >= 0 || conv_search >= 0 || no_mem_pattern || gpu_mem_limit > 0 ||
-           shared_arena || shrink > 0;
-  }
+  bool overridden = false;  // any HASTUR_ORT_* variable set
 };
 
 inline const CudaTuning& CudaTuningFromEnv() {
@@ -67,13 +71,17 @@ inline const CudaTuning& CudaTuningFromEnv() {
     if (const char* v = get("HASTUR_ORT_MEM_PATTERN")) c.no_mem_pattern = (v[0] == '0');
     if (const char* v = get("HASTUR_ORT_GPU_MEM_LIMIT_MB"))
       c.gpu_mem_limit = static_cast<size_t>(std::strtoull(v, nullptr, 10)) << 20;
-    if (const char* v = get("HASTUR_ORT_SHARED_ARENA")) c.shared_arena = (v[0] == '1');
+    if (const char* v = get("HASTUR_ORT_SHARED_ARENA")) c.shared_arena = (v[0] != '0');
     if (const char* v = get("HASTUR_ORT_SHRINK")) {
       if (!std::strcmp(v, "g3")) c.shrink = 1;
       else if (!std::strcmp(v, "all")) c.shrink = 2;
     }
     if (const char* v = get("HASTUR_TRACK_MEMLOG")) c.memlog = std::atoi(v);
-    if (c.any())
+    for (const char* k : {"HASTUR_ORT_MEM_PATTERN", "HASTUR_ORT_SHARED_ARENA",
+                          "HASTUR_ORT_ARENA_EXTEND", "HASTUR_ORT_CONV_SEARCH",
+                          "HASTUR_ORT_GPU_MEM_LIMIT_MB", "HASTUR_ORT_SHRINK"})
+      if (get(k)) c.overridden = true;
+    if (c.overridden)
       std::fprintf(stderr,
                    "[hastur] ORT CUDA tuning: arena_extend=%d conv_search=%d mem_pattern=%d "
                    "gpu_mem_limit_mb=%zu shared_arena=%d shrink=%d\n",
@@ -85,7 +93,7 @@ inline const CudaTuning& CudaTuningFromEnv() {
 }
 
 #ifndef __APPLE__
-// Apply the per-session knobs. A no-op when none is set.
+// Apply the per-session settings to a CUDA provider + its session options.
 inline void ApplyCudaTuning(OrtCUDAProviderOptions& cuda, Ort::SessionOptions& so) {
   const CudaTuning& t = CudaTuningFromEnv();
   if (t.arena_extend >= 0) cuda.arena_extend_strategy = t.arena_extend;

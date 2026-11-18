@@ -95,11 +95,11 @@ void OrtSessionManager::Handle::Build() {
       OrtCUDAProviderOptions cuda{};
       cuda.device_id = cfg_.device;
       cuda.do_copy_in_default_stream = 1;
-      // Opt-in memory knobs (OrtCudaTuning.h); a no-op when none is set.
+      // Memory settings and their overrides: OrtCudaTuning.h.
       const CudaTuning& tune = CudaTuningFromEnv();
       ApplyCudaTuning(cuda, so);
-      // HASTUR_ORT_SHARED_ARENA turns on the shared env arena below without a
-      // caller budget; its cap is then HASTUR_ORT_GPU_MEM_LIMIT_MB (0 = none).
+      // The shared env arena is on by default (HASTUR_ORT_SHARED_ARENA=0 turns it
+      // off); without a caller budget its cap is HASTUR_ORT_GPU_MEM_LIMIT_MB (0 = none).
       const bool shared = cfg_.gpu_mem_limit > 0 || tune.shared_arena;
       const size_t shared_limit =
           cfg_.gpu_mem_limit > 0 ? cfg_.gpu_mem_limit : tune.gpu_mem_limit;
@@ -112,21 +112,32 @@ void OrtSessionManager::Handle::Build() {
       if (shared) {
         if (!impl.cuda_arena_registered) {
           // One shared CUDA arena on the env so every session draws from the
-          // same budget rather than each allocating its own.
+          // same budget rather than each allocating its own. ORT's env is
+          // process-wide, so a second manager in the same process finds the
+          // arena already registered: that, or any other registration failure,
+          // must not cost the CUDA provider. Sessions then use whatever arena is
+          // registered, or their own when there is none.
           OrtArenaCfg* arena_cfg = nullptr;
-          Ort::ThrowOnError(Ort::GetApi().CreateArenaCfg(
-              shared_limit, /*arena_extend_strategy=*/shared_extend,
-              /*initial_chunk_size_bytes=*/-1, /*max_dead_bytes_per_chunk=*/-1,
-              &arena_cfg));
           OrtMemoryInfo* mem = nullptr;
-          Ort::ThrowOnError(Ort::GetApi().CreateMemoryInfo(
-              "Cuda", OrtArenaAllocator, cfg_.device, OrtMemTypeDefault, &mem));
-          Ort::ThrowOnError(Ort::GetApi().CreateAndRegisterAllocatorV2(
-              static_cast<OrtEnv*>(impl.env), "CUDAExecutionProvider", mem,
-              arena_cfg, /*keys=*/nullptr, /*values=*/nullptr, /*num_keys=*/0));
-          Ort::GetApi().ReleaseMemoryInfo(mem);
-          Ort::GetApi().ReleaseArenaCfg(arena_cfg);
-          impl.cuda_arena_registered = true;
+          OrtStatus* st = Ort::GetApi().CreateArenaCfg(
+              shared_limit, /*arena_extend_strategy=*/shared_extend,
+              /*initial_chunk_size_bytes=*/-1, /*max_dead_bytes_per_chunk=*/-1, &arena_cfg);
+          if (!st)
+            st = Ort::GetApi().CreateMemoryInfo("Cuda", OrtArenaAllocator, cfg_.device,
+                                                OrtMemTypeDefault, &mem);
+          if (!st)
+            st = Ort::GetApi().CreateAndRegisterAllocatorV2(
+                static_cast<OrtEnv*>(impl.env), "CUDAExecutionProvider", mem, arena_cfg,
+                /*keys=*/nullptr, /*values=*/nullptr, /*num_keys=*/0);
+          if (st) {
+            if (tune.overridden || tune.memlog > 0)
+              std::fprintf(stderr, "[hastur] shared CUDA arena not registered: %s\n",
+                           Ort::GetApi().GetErrorMessage(st));
+            Ort::GetApi().ReleaseStatus(st);
+          }
+          if (mem) Ort::GetApi().ReleaseMemoryInfo(mem);
+          if (arena_cfg) Ort::GetApi().ReleaseArenaCfg(arena_cfg);
+          impl.cuda_arena_registered = true;  // attempted once per manager
         }
         so.AddConfigEntry("session.use_env_allocators", "1");
       }
