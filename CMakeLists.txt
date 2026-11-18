@@ -70,7 +70,11 @@ set(OFX_SUPPORT "${OFX_ROOT}/Support")
 #   macOS arm64 -> CoreML EP ; Linux x64 -> CUDA EP (GPU) + CPU.
 # Populate-only (not a CMake project).
 # ---------------------------------------------------------------------------
-set(ORT_BASE "https://github.com/microsoft/onnxruntime/releases/download/v${HASTUR_ORT_VERSION}")
+# Unmodified copies of Microsoft's official prebuilt archives, re-hosted because the upstream
+# release assets (github.com/microsoft/onnxruntime/releases/download/v1.27.1/) returned 404 on
+# 2026-11-18. Every archive is pinned by SHA-256 below; override ORT_BASE to use another mirror.
+set(ORT_BASE "https://github.com/samhodge-tokgan/humbaba/releases/download/ort-${HASTUR_ORT_VERSION}-mirror"
+    CACHE STRING "Base URL for the prebuilt ONNX Runtime archives (Linux / macOS)")
 if(HASTUR_WITH_ONNX)
   set(ORT_HASH_ARG "")
   if(APPLE)
@@ -97,7 +101,7 @@ if(HASTUR_WITH_ONNX)
     set(HASTUR_ACCEL "CUDA")
   elseif(UNIX)  # Linux
     set(ORT_URL "${ORT_BASE}/onnxruntime-linux-x64-gpu_cuda12-${HASTUR_ORT_VERSION}.tgz")
-    # (hash added once pinned; FetchContent fetches without it meanwhile)
+    set(ORT_HASH_ARG URL_HASH SHA256=08b568bd69500c36606aff7c3896ee4fa7d3531719f6b00f43e6a34db41dc4bf)
     set(ORT_SHLIB "lib/libonnxruntime.so.${HASTUR_ORT_VERSION}")
     set(HASTUR_ACCEL "CUDA")
   else()
