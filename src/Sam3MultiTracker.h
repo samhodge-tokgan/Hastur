@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -172,6 +173,9 @@ class Sam3MultiTracker {
   std::vector<int> FrameFilterObj(const ObjState& o, int frame_idx, bool reverse) const;
   const Frame* GetFrame(const ObjState& o, int idx) const;
   static Tensor LoadNpyFloat(const std::string& path);
+  // HASTUR_TRACK_MEMLOG: CUDA arena statistics of all five graphs, one line each.
+  void LogArenas(const char* when);
+  std::set<int64_t> g3_lengths_;  // distinct G3 prompt lengths seen (memlog only)
 
   OrtSessionManager mgr_;
   OrtGraph g1_, g2_, g3_, g4_, g5_;
