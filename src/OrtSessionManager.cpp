@@ -59,9 +59,32 @@ struct OrtSessionManager::Impl {
   // A single CUDA arena shared across sessions so the whole pipeline lives
   // inside one GPU memory budget (registered once on the shared env).
   bool cuda_arena_registered = false;
+  // Device of the arena this manager registered, or -1 if it registered none.
+  int cuda_arena_device = -1;
 #endif
   explicit Impl(const std::string& log_id)
       : env(ORT_LOGGING_LEVEL_WARNING, log_id.c_str()) {}
+
+  // Unregister the shared arena while the CUDA provider library is still
+  // loaded. OrtEnv's destructor unloads the shared provider libraries *before*
+  // it destroys the Environment that holds the env-registered allocators, so an
+  // arena still registered at that point is destroyed after its code is
+  // unmapped. On Windows FreeLibrary really unmaps onnxruntime_providers_cuda.dll
+  // and the process faults (0xc0000005 in onnxruntime.dll) on exit; on Linux the
+  // provider stays mapped and nothing shows. Sessions hold their own reference
+  // to the allocator, so this is safe whether or not they are already gone.
+  ~Impl() {
+#ifndef __APPLE__
+    if (cuda_arena_device >= 0) {
+      OrtMemoryInfo* mem = nullptr;
+      OrtStatus* st = Ort::GetApi().CreateMemoryInfo("Cuda", OrtArenaAllocator,
+                                                     cuda_arena_device, OrtMemTypeDefault, &mem);
+      if (!st) st = Ort::GetApi().UnregisterAllocator(static_cast<OrtEnv*>(env), mem);
+      if (st) Ort::GetApi().ReleaseStatus(st);
+      if (mem) Ort::GetApi().ReleaseMemoryInfo(mem);
+    }
+#endif
+  }
 };
 
 OrtSessionManager::OrtSessionManager(const std::string& log_id)
@@ -129,6 +152,7 @@ void OrtSessionManager::Handle::Build() {
             st = Ort::GetApi().CreateAndRegisterAllocatorV2(
                 static_cast<OrtEnv*>(impl.env), "CUDAExecutionProvider", mem, arena_cfg,
                 /*keys=*/nullptr, /*values=*/nullptr, /*num_keys=*/0);
+          if (!st) impl.cuda_arena_device = cfg_.device;
           if (st) {
             if (tune.overridden || tune.memlog > 0)
               std::fprintf(stderr, "[hastur] shared CUDA arena not registered: %s\n",
